@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Manrope", system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Manrope", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  --cinema-bg-deep: #080810;
+  --cinema-bg-navy: #0B1020;
+  --cinema-bg-plum: #151126;
+  --cinema-surface: #1C1930;
+  --cinema-surface-elevated: #211B32;
+  --cinema-primary: #8B5CF6;
+  --cinema-primary-bright: #9167FF;
+  --cinema-secondary: #C4B5FD;
+  --cinema-accent-blue: #83A9FF;
+  --cinema-accent-rose: #F472B6;
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: #080810;
+  color: #f4f2ff;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cinema Glassmorphism for UI overlays (never applied directly over active WebGL canvas HUDs when software GL is active) */
+.cinema-glass {
+  background: rgba(21, 17, 38, 0.84);
+  border: 1px solid rgba(196, 181, 253, 0.14);
+}
+
+.cinema-surface {
+  background: #1C1930;
+  border: 1px solid rgba(196, 181, 253, 0.12);
+}
+
+.cinema-surface-elevated {
+  background: #211B32;
+  border: 1px solid rgba(196, 181, 253, 0.16);
+}
+
+/* Custom sleek scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080810;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.35);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Floating couple reaction animation */
+@keyframes reactionFloatUp {
+  0% {
+    opacity: 0;
+    transform: translateY(24px) scale(0.7);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0px) scale(1.08);
+  }
+  80% {
+    opacity: 0.95;
+    transform: translateY(-130px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-190px) scale(0.85);
+  }
+}
+
+.animate-reaction-float {
+  animation: reactionFloatUp 2.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

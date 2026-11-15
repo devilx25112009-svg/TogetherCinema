@@ -1,0 +1,21 @@
+{
+  "sessionId": "up_1794696860764_vgqpea",
+  "ownerId": "demo-partner-a",
+  "fileName": "test_ac3.mp4",
+  "mimeType": "video/mp4",
+  "fileSizeBytes": 478279,
+  "chunkSizeBytes": 8388608,
+  "totalChunks": 1,
+  "uploadedParts": [
+    1
+  ],
+  "uploadedBytes": 478279,
+  "status": "completed",
+  "storageKey": "up_1794696860764_vgqpea_test_ac3.mp4",
+  "provider": "local",
+  "createdAt": "2026-11-14T22:54:20.842Z",
+  "updatedAt": "2026-11-14T22:54:20.892Z",
+  "partSizes": {
+    "1": 478279
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "sessionId": "up_1794681314180_qu0wgn",
+  "ownerId": "demo-partner-a",
+  "fileName": "couple_test_4k.mp4",
+  "mimeType": "video/mp4",
+  "fileSizeBytes": 67108864,
+  "chunkSizeBytes": 8388608,
+  "totalChunks": 8,
+  "uploadedParts": [
+    1
+  ],
+  "uploadedBytes": 1024,
+  "status": "aborted",
+  "storageKey": "up_1794681314180_qu0wgn_couple_test_4k.mp4",
+  "provider": "local",
+  "createdAt": "2026-11-14T18:35:14.181Z",
+  "updatedAt": "2026-11-14T18:35:14.201Z"
+}

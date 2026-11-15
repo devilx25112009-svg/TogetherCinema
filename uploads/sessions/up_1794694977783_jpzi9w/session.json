@@ -1,0 +1,21 @@
+{
+  "sessionId": "up_1794694977783_jpzi9w",
+  "ownerId": "demo-partner-a",
+  "fileName": "test_35gb_ready.mp4",
+  "mimeType": "video/mp4",
+  "fileSizeBytes": 36827,
+  "chunkSizeBytes": 8388608,
+  "totalChunks": 1,
+  "uploadedParts": [
+    1
+  ],
+  "uploadedBytes": 36827,
+  "status": "aborted",
+  "storageKey": "up_1794694977783_jpzi9w_test_35gb_ready.mp4",
+  "provider": "local",
+  "createdAt": "2026-11-14T22:22:57.829Z",
+  "updatedAt": "2026-11-14T22:23:31.624Z",
+  "partSizes": {
+    "1": 36827
+  }
+}

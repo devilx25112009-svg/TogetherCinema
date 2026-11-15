@@ -1,0 +1,332 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'avatarUrl', 'partnerId', 'connectionId', 'preferredSeat', 'storageUsedBytes', 'subscriptionTier', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500))
+        && (!('partnerId' in data) || (data.partnerId is string && data.partnerId.size() <= 128))
+        && (!('connectionId' in data) || (data.connectionId is string && data.connectionId.size() <= 128))
+        && (!('preferredSeat' in data) || (data.preferredSeat is string && data.preferredSeat.size() <= 40))
+        && (!('storageUsedBytes' in data) || (data.storageUsedBytes is number && data.storageUsedBytes >= 0))
+        && (!('subscriptionTier' in data) || (data.subscriptionTier in ['free', 'duet_plus', 'imax_vault']))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidPrivateInfo(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'updatedAt'])
+        && data.uid == userId
+        && data.email is string && data.email.size() <= 200
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidMovie(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'genre', 'durationSeconds', 'fileSizeBytes', 'resolution', 'processingStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'sharedWithPartnerId', 'title', 'description', 'genre', 'durationSeconds', 'fileSizeBytes', 'resolution', 'videoFormat', 'audioFormat', 'thumbnailUrl', 'storageKey', 'hlsManifestUrl', 'processingStatus', 'collectionName', 'playbackProgress', 'isFavourite', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.genre is string && data.genre.size() <= 60
+        && data.durationSeconds is number && data.durationSeconds >= 0
+        && data.fileSizeBytes is number && data.fileSizeBytes >= 0
+        && data.resolution is string && data.resolution.size() <= 40
+        && data.processingStatus in ['pending', 'processing', 'ready', 'ffmpeg_unavailable', 'failed']
+        && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
+        && (!('sharedWithPartnerId' in data) || (data.sharedWithPartnerId is string && data.sharedWithPartnerId.size() <= 128))
+        && (!('videoFormat' in data) || (data.videoFormat is string && data.videoFormat.size() <= 40))
+        && (!('audioFormat' in data) || (data.audioFormat is string && data.audioFormat.size() <= 60))
+        && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 500))
+        && (!('storageKey' in data) || (data.storageKey is string && data.storageKey.size() <= 300))
+        && (!('hlsManifestUrl' in data) || (data.hlsManifestUrl is string && data.hlsManifestUrl.size() <= 500))
+        && (!('collectionName' in data) || (data.collectionName is string && data.collectionName.size() <= 80))
+        && (!('playbackProgress' in data) || (data.playbackProgress is number && data.playbackProgress >= 0))
+        && (!('isFavourite' in data) || data.isFavourite is bool)
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidCinemaRoom(data) {
+      return data.keys().hasAll(['roomId', 'hostId', 'inviteCode', 'name', 'movieId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['roomId', 'hostId', 'guestId', 'inviteCode', 'name', 'movieId', 'theme', 'privacy', 'defaultQuality', 'defaultAudio', 'defaultScreenMode', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.roomId)
+        && isValidId(data.hostId)
+        && isValidId(data.inviteCode)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.movieId is string && data.movieId.size() <= 128
+        && data.status in ['waiting', 'ready', 'playing', 'paused', 'ended']
+        && (!('guestId' in data) || (data.guestId is string && data.guestId.size() <= 128))
+        && (!('theme' in data) || (data.theme is string && data.theme.size() <= 40))
+        && (!('privacy' in data) || data.privacy in ['partner_only', 'invite_code'])
+        && (!('defaultQuality' in data) || (data.defaultQuality is string && data.defaultQuality.size() <= 20))
+        && (!('defaultAudio' in data) || (data.defaultAudio is string && data.defaultAudio.size() <= 40))
+        && (!('defaultScreenMode' in data) || (data.defaultScreenMode is string && data.defaultScreenMode.size() <= 40))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidPartnerConnection(data) {
+      return data.keys().hasAll(['connectionId', 'userAId', 'userBId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['connectionId', 'userAId', 'userBId', 'userAName', 'userBName', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.connectionId)
+        && isValidId(data.userAId)
+        && isValidId(data.userBId)
+        && data.status in ['connected', 'disconnected']
+        && (!('userAName' in data) || (data.userAName is string && data.userAName.size() <= 80))
+        && (!('userBName' in data) || (data.userBName is string && data.userBName.size() <= 80))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidInvitation(data) {
+      return data.keys().hasAll(['code', 'creatorId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'creatorId', 'creatorName', 'status', 'acceptedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.code)
+        && isValidId(data.creatorId)
+        && data.status in ['pending', 'accepted', 'revoked']
+        && (!('creatorName' in data) || (data.creatorName is string && data.creatorName.size() <= 80))
+        && (!('acceptedBy' in data) || (data.acceptedBy is string && data.acceptedBy.size() <= 128))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidUploadSession(data) {
+      return data.keys().hasAll(['sessionId', 'ownerId', 'fileName', 'fileSizeBytes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['sessionId', 'ownerId', 'fileName', 'fileSizeBytes', 'chunkSizeBytes', 'totalChunks', 'uploadedBytes', 'status', 'storageKey', 'createdAt', 'updatedAt'])
+        && isValidId(data.sessionId)
+        && isValidId(data.ownerId)
+        && data.fileName is string && data.fileName.size() <= 260
+        && data.fileSizeBytes is number && data.fileSizeBytes >= 0
+        && data.status in ['uploading', 'paused', 'completed', 'aborted', 'failed']
+        && (!('chunkSizeBytes' in data) || data.chunkSizeBytes is number)
+        && (!('totalChunks' in data) || data.totalChunks is number)
+        && (!('uploadedBytes' in data) || data.uploadedBytes is number)
+        && (!('storageKey' in data) || (data.storageKey is string && data.storageKey.size() <= 300))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidWatchlistItem(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'priority', 'votes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'partnerId', 'title', 'genre', 'priority', 'plannedDate', 'suggestedBy', 'votes', 'isFavourite', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.priority in ['high', 'medium', 'low']
+        && data.votes is number && data.votes >= 0
+        && data.status in ['queued', 'scheduled', 'watched']
+        && (!('partnerId' in data) || (data.partnerId is string && data.partnerId.size() <= 128))
+        && (!('genre' in data) || (data.genre is string && data.genre.size() <= 60))
+        && (!('plannedDate' in data) || (data.plannedDate is string && data.plannedDate.size() <= 40))
+        && (!('suggestedBy' in data) || (data.suggestedBy is string && data.suggestedBy.size() <= 80))
+        && (!('isFavourite' in data) || data.isFavourite is bool)
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidMemoryItem(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'movieTitle', 'timestampLabel', 'note', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'partnerId', 'movieTitle', 'timestampLabel', 'note', 'imageUrl', 'movieDate', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && data.movieTitle is string && data.movieTitle.size() <= 160
+        && data.timestampLabel is string && data.timestampLabel.size() <= 30
+        && data.note is string && data.note.size() <= 1000
+        && (!('partnerId' in data) || (data.partnerId is string && data.partnerId.size() <= 128))
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500))
+        && (!('movieDate' in data) || (data.movieDate is string && data.movieDate.size() <= 40))
+        && data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    function isValidSnackItem(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'category', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'partnerId', 'name', 'category', 'inTray', 'inWishlist', 'sentToPartner', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && data.name is string && data.name.size() <= 120
+        && data.category is string && data.category.size() <= 60
+        && (!('partnerId' in data) || (data.partnerId is string && data.partnerId.size() <= 128))
+        && (!('inTray' in data) || data.inTray is bool)
+        && (!('inWishlist' in data) || data.inWishlist is bool)
+        && (!('sentToPartner' in data) || data.sentToPartner is bool)
+        && data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    // Users public profile (no PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || (isSignedIn() && existing().partnerId == request.auth.uid));
+      allow list: if false;
+      allow create: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId);
+      allow update: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+
+      // Isolated PII
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId) && isValidId(docId) && isOwner(userId) && isValidPrivateInfo(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(docId) && isOwner(userId) && isValidPrivateInfo(incoming(), userId);
+        allow delete: if false;
+      }
+    }
+
+    match /partnerConnections/{connectionId} {
+      allow get: if isValidId(connectionId) && isSignedIn() && (existing().userAId == request.auth.uid || existing().userBId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.userAId == request.auth.uid || resource.data.userBId == request.auth.uid);
+      allow create: if isValidId(connectionId) && isSignedIn() && isValidPartnerConnection(incoming())
+        && (incoming().userAId == request.auth.uid || incoming().userBId == request.auth.uid);
+      allow update: if isValidId(connectionId) && isSignedIn() && isValidPartnerConnection(incoming())
+        && (existing().userAId == request.auth.uid || existing().userBId == request.auth.uid)
+        && existing().status != 'disconnected'
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /invitations/{invitationId} {
+      allow get: if isValidId(invitationId) && isSignedIn();
+      allow list: if isSignedIn() && resource.data.creatorId == request.auth.uid;
+      allow create: if isValidId(invitationId) && isSignedIn() && isValidInvitation(incoming()) && incoming().creatorId == request.auth.uid;
+      allow update: if isValidId(invitationId) && isSignedIn() && isValidInvitation(incoming())
+        && existing().status == 'pending'
+        && (
+          (existing().creatorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+          || (existing().creatorId != request.auth.uid && incoming().acceptedBy == request.auth.uid && incoming().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedBy', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    match /movies/{movieId} {
+      allow get: if isValidId(movieId) && isSignedIn() && (existing().ownerId == request.auth.uid || existing().sharedWithPartnerId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.sharedWithPartnerId == request.auth.uid);
+      allow create: if isValidId(movieId) && isSignedIn() && isValidMovie(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isValidId(movieId) && isSignedIn() && isValidMovie(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'genre', 'collectionName', 'playbackProgress', 'isFavourite', 'sharedWithPartnerId', 'processingStatus', 'updatedAt']);
+      allow delete: if isValidId(movieId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    match /uploadSessions/{sessionId} {
+      allow get: if isValidId(sessionId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(sessionId) && isSignedIn() && isValidUploadSession(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isValidId(sessionId) && isSignedIn() && isValidUploadSession(incoming())
+        && existing().ownerId == request.auth.uid
+        && existing().status != 'aborted'
+        && incoming().diff(existing()).affectedKeys().hasOnly(['uploadedBytes', 'status', 'storageKey', 'updatedAt']);
+      allow delete: if isValidId(sessionId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    match /cinemaRooms/{roomId} {
+      allow get: if isValidId(roomId) && isSignedIn() && (existing().hostId == request.auth.uid || existing().guestId == request.auth.uid || existing().privacy == 'invite_code');
+      allow list: if isSignedIn() && (resource.data.hostId == request.auth.uid || resource.data.guestId == request.auth.uid);
+      allow create: if isValidId(roomId) && isSignedIn() && isValidCinemaRoom(incoming()) && incoming().hostId == request.auth.uid;
+      allow update: if isValidId(roomId) && isSignedIn() && isValidCinemaRoom(incoming())
+        && existing().status != 'ended'
+        && (
+          (existing().hostId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'movieId', 'theme', 'defaultQuality', 'defaultAudio', 'defaultScreenMode', 'status', 'guestId', 'updatedAt']))
+          || (existing().privacy == 'invite_code' && incoming().guestId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['guestId', 'status', 'updatedAt']))
+        );
+      allow delete: if isValidId(roomId) && isSignedIn() && existing().hostId == request.auth.uid;
+
+      match /participants/{participantId} {
+        allow get, list: if isSignedIn() && (
+          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        );
+        allow create, update: if isValidId(participantId) && isSignedIn() && participantId == request.auth.uid
+          && (
+            get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+            || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+          );
+        allow delete: if false;
+      }
+
+      match /playbackStates/{stateId} {
+        allow get: if isValidId(stateId) && isSignedIn() && (
+          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        );
+        allow list: if false;
+        allow create, update: if isValidId(stateId) && isSignedIn() && (
+          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        );
+        allow delete: if false;
+      }
+
+      match /chatMessages/{messageId} {
+        allow get, list: if isSignedIn() && (
+          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        );
+        allow create: if isValidId(messageId) && isSignedIn() && incoming().senderId == request.auth.uid
+          && (
+            get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
+            || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+          );
+        allow update, delete: if false;
+      }
+    }
+
+    match /watchlists/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn() && (existing().ownerId == request.auth.uid || existing().partnerId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.partnerId == request.auth.uid);
+      allow create: if isValidId(itemId) && isSignedIn() && isValidWatchlistItem(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isValidId(itemId) && isSignedIn() && isValidWatchlistItem(incoming())
+        && (existing().ownerId == request.auth.uid || existing().partnerId == request.auth.uid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['votes', 'isFavourite', 'priority', 'plannedDate', 'status', 'updatedAt']);
+      allow delete: if isValidId(itemId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    match /memories/{memoryId} {
+      allow get: if isValidId(memoryId) && isSignedIn() && (existing().ownerId == request.auth.uid || existing().partnerId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.partnerId == request.auth.uid);
+      allow create: if isValidId(memoryId) && isSignedIn() && isValidMemoryItem(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isValidId(memoryId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    match /snacks/{snackId} {
+      allow get: if isValidId(snackId) && isSignedIn() && (existing().ownerId == request.auth.uid || existing().partnerId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || resource.data.partnerId == request.auth.uid);
+      allow create: if isValidId(snackId) && isSignedIn() && isValidSnackItem(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isValidId(snackId) && isSignedIn() && isValidSnackItem(incoming())
+        && (existing().ownerId == request.auth.uid || existing().partnerId == request.auth.uid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['inTray', 'inWishlist', 'sentToPartner']);
+      allow delete: if isValidId(snackId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+  }
+}

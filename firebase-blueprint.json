@@ -1,0 +1,286 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public cinema profile for a user account.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "avatarUrl": { "type": "string", "maxLength": 500 },
+        "partnerId": { "type": "string", "maxLength": 128 },
+        "connectionId": { "type": "string", "maxLength": 128 },
+        "preferredSeat": { "type": "string", "maxLength": 40 },
+        "storageUsedBytes": { "type": "number" },
+        "subscriptionTier": { "type": "string", "enum": ["free", "duet_plus", "imax_vault"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII document containing user email and notification preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "updatedAt"]
+    },
+    "PartnerConnection": {
+      "title": "PartnerConnection",
+      "description": "Authenticated link between two partner user accounts.",
+      "type": "object",
+      "properties": {
+        "connectionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userAId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userBId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userAName": { "type": "string", "maxLength": 80 },
+        "userBName": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["connected", "disconnected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["connectionId", "userAId", "userBId", "status", "createdAt", "updatedAt"]
+    },
+    "PartnerInvitation": {
+      "title": "PartnerInvitation",
+      "description": "Single-use invitation code for connecting partner accounts.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorName": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "acceptedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "creatorId", "status", "createdAt", "updatedAt"]
+    },
+    "Movie": {
+      "title": "Movie",
+      "description": "Metadata for an uploaded personal film in the cinema library.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sharedWithPartnerId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "genre": { "type": "string", "maxLength": 60 },
+        "durationSeconds": { "type": "number" },
+        "fileSizeBytes": { "type": "number" },
+        "resolution": { "type": "string", "maxLength": 40 },
+        "videoFormat": { "type": "string", "maxLength": 40 },
+        "audioFormat": { "type": "string", "maxLength": 60 },
+        "thumbnailUrl": { "type": "string", "maxLength": 500 },
+        "storageKey": { "type": "string", "maxLength": 300 },
+        "hlsManifestUrl": { "type": "string", "maxLength": 500 },
+        "processingStatus": { "type": "string", "enum": ["pending", "processing", "ready", "ffmpeg_unavailable", "failed"] },
+        "collectionName": { "type": "string", "maxLength": 80 },
+        "playbackProgress": { "type": "number" },
+        "isFavourite": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "genre", "durationSeconds", "fileSizeBytes", "resolution", "processingStatus", "createdAt", "updatedAt"]
+    },
+    "UploadSession": {
+      "title": "UploadSession",
+      "description": "Tracks resumable multipart chunked upload progress for large video files.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "maxLength": 260 },
+        "fileSizeBytes": { "type": "number" },
+        "chunkSizeBytes": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "uploadedBytes": { "type": "number" },
+        "status": { "type": "string", "enum": ["uploading", "paused", "completed", "aborted", "failed"] },
+        "storageKey": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionId", "ownerId", "fileName", "fileSizeBytes", "status", "createdAt", "updatedAt"]
+    },
+    "CinemaRoom": {
+      "title": "CinemaRoom",
+      "description": "Private synchronized screening room for two partners.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hostId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "guestId": { "type": "string", "maxLength": 128 },
+        "inviteCode": { "type": "string", "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "movieId": { "type": "string", "maxLength": 128 },
+        "theme": { "type": "string", "maxLength": 40 },
+        "privacy": { "type": "string", "enum": ["partner_only", "invite_code"] },
+        "defaultQuality": { "type": "string", "maxLength": 20 },
+        "defaultAudio": { "type": "string", "maxLength": 40 },
+        "defaultScreenMode": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["waiting", "ready", "playing", "paused", "ended"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["roomId", "hostId", "inviteCode", "name", "movieId", "status", "createdAt", "updatedAt"]
+    },
+    "RoomParticipant": {
+      "title": "RoomParticipant",
+      "description": "Participant membership and presence inside a cinema room.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "maxLength": 80 },
+        "role": { "type": "string", "enum": ["host", "guest"] },
+        "online": { "type": "boolean" },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "role", "online", "joinedAt"]
+    },
+    "PlaybackState": {
+      "title": "PlaybackState",
+      "description": "Authoritative playback timestamp and state for a cinema room.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string", "maxLength": 128 },
+        "movieId": { "type": "string", "maxLength": 128 },
+        "currentTime": { "type": "number" },
+        "playing": { "type": "boolean" },
+        "playbackRate": { "type": "number" },
+        "hostId": { "type": "string", "maxLength": 128 },
+        "revision": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["roomId", "movieId", "currentTime", "playing", "playbackRate", "revision", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "In-player chat message scoped to a cinema room.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 80 },
+        "text": { "type": "string", "maxLength": 1200 },
+        "type": { "type": "string", "enum": ["text", "gif", "voice", "snack"] },
+        "replyToId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "senderId", "senderName", "text", "type", "createdAt"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "Shared movie night watchlist suggestion.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "partnerId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "genre": { "type": "string", "maxLength": 60 },
+        "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+        "plannedDate": { "type": "string", "maxLength": 40 },
+        "suggestedBy": { "type": "string", "maxLength": 80 },
+        "votes": { "type": "number" },
+        "isFavourite": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["queued", "scheduled", "watched"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "priority", "votes", "status", "createdAt", "updatedAt"]
+    },
+    "MemoryItem": {
+      "title": "MemoryItem",
+      "description": "Saved movie night moment, timestamp, and personal note.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "partnerId": { "type": "string", "maxLength": 128 },
+        "movieTitle": { "type": "string", "maxLength": 160 },
+        "timestampLabel": { "type": "string", "maxLength": 30 },
+        "note": { "type": "string", "maxLength": 1000 },
+        "imageUrl": { "type": "string", "maxLength": 500 },
+        "movieDate": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "movieTitle", "timestampLabel", "note", "createdAt"]
+    },
+    "SnackOrderItem": {
+      "title": "SnackOrderItem",
+      "description": "Virtual snack tray and partner snack gift item.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "partnerId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "maxLength": 60 },
+        "inTray": { "type": "boolean" },
+        "inWishlist": { "type": "boolean" },
+        "sentToPartner": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "category", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User public cinema profile."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII document for user email."
+    },
+    "/partnerConnections/{connectionId}": {
+      "schema": { "$ref": "#/entities/PartnerConnection" },
+      "description": "Two-user partner connection records."
+    },
+    "/invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/PartnerInvitation" },
+      "description": "Partner invitation codes."
+    },
+    "/movies/{movieId}": {
+      "schema": { "$ref": "#/entities/Movie" },
+      "description": "Personal movie metadata library."
+    },
+    "/uploadSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/UploadSession" },
+      "description": "Resumable multipart upload sessions."
+    },
+    "/cinemaRooms/{roomId}": {
+      "schema": { "$ref": "#/entities/CinemaRoom" },
+      "description": "Private virtual cinema screening rooms."
+    },
+    "/cinemaRooms/{roomId}/participants/{participantId}": {
+      "schema": { "$ref": "#/entities/RoomParticipant" },
+      "description": "Authorized participants in a cinema room."
+    },
+    "/cinemaRooms/{roomId}/playbackStates/{stateId}": {
+      "schema": { "$ref": "#/entities/PlaybackState" },
+      "description": "Synchronized playback state."
+    },
+    "/cinemaRooms/{roomId}/chatMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Live cinema room chat messages."
+    },
+    "/watchlists/{itemId}": {
+      "schema": { "$ref": "#/entities/WatchlistItem" },
+      "description": "Shared movie watchlist."
+    },
+    "/memories/{memoryId}": {
+      "schema": { "$ref": "#/entities/MemoryItem" },
+      "description": "Saved movie night memories."
+    },
+    "/snacks/{snackId}": {
+      "schema": { "$ref": "#/entities/SnackOrderItem" },
+      "description": "Virtual snack tray and shared gifts."
+    }
+  }
+}
