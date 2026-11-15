@@ -5,7 +5,10 @@ import {
   evaluatePlaybackDrift,
   formatTimestamp,
   projectAuthoritativeTime,
+  resolveActiveChapter,
+  shouldAcceptIncomingPlaybackState,
   shouldApplyMediaDriftCorrection,
+  shouldForceImmediateSyncSeek,
 } from './playbackSync';
 import type { PlaybackState } from '../types/cinema';
 
@@ -42,15 +45,51 @@ test('evaluatePlaybackDrift chooses none, soft rate nudge, or hard seek accurate
   assert.equal(seek.targetTime, 102.5);
 });
 
-test('applyAuthoritativeCommand increments revision and preserves projected time on pause/seek', () => {
-  const paused = applyAuthoritativeCommand(baseState, { action: 'pause' }, 14000);
+test('applyAuthoritativeCommand increments revision, records lastAction/actor, and preserves projected time on pause/seek', () => {
+  const paused = applyAuthoritativeCommand(baseState, { action: 'pause' }, 14000, {
+    userId: 'user-b',
+    displayName: 'Maya',
+  });
   assert.equal(paused.playing, false);
   assert.equal(paused.currentTime, 104);
   assert.equal(paused.revision, 2);
+  assert.equal(paused.lastAction, 'pause');
+  assert.equal(paused.updatedByName, 'Maya');
 
   const sought = applyAuthoritativeCommand(paused, { action: 'seek', time: 520 }, 15000);
   assert.equal(sought.currentTime, 520);
   assert.equal(sought.revision, 3);
+  assert.equal(sought.lastAction, 'seek');
+});
+
+test('shouldAcceptIncomingPlaybackState prevents stale revisions from reverting skips or scene changes', () => {
+  const rev5: PlaybackState = { ...baseState, revision: 5, updatedAt: 50000 };
+  const rev4: PlaybackState = { ...baseState, revision: 4, updatedAt: 60000 };
+  const rev6: PlaybackState = { ...baseState, revision: 6, updatedAt: 51000 };
+  const movieSwitch: PlaybackState = { ...baseState, movieId: 'mov-2', revision: 1, updatedAt: 52000 };
+
+  assert.equal(shouldAcceptIncomingPlaybackState(rev5, rev4), false);
+  assert.equal(shouldAcceptIncomingPlaybackState(rev5, rev6), true);
+  assert.equal(shouldAcceptIncomingPlaybackState(rev5, movieSwitch), true);
+});
+
+test('shouldForceImmediateSyncSeek reacts immediately to skips, chapter jumps, and source changes', () => {
+  assert.equal(shouldForceImmediateSyncSeek(100, 100.8, 'seek'), true);
+  assert.equal(shouldForceImmediateSyncSeek(100, 100.2, 'seek'), false);
+  assert.equal(shouldForceImmediateSyncSeek(100, 100.7, 'play'), false);
+  assert.equal(shouldForceImmediateSyncSeek(100, 101.5, 'play'), true);
+});
+
+test('resolveActiveChapter selects matching part by current playback timestamp', () => {
+  const chapters = [
+    { id: 'ch-1', title: 'Part 1', timeSeconds: 0 },
+    { id: 'ch-2', title: 'Part 2', timeSeconds: 120 },
+    { id: 'ch-3', title: 'Part 3', timeSeconds: 300 },
+  ];
+  assert.equal(resolveActiveChapter(chapters, 10)?.id, 'ch-1');
+  assert.equal(resolveActiveChapter(chapters, 120)?.id, 'ch-2');
+  assert.equal(resolveActiveChapter(chapters, 450)?.id, 'ch-3');
+  assert.equal(resolveActiveChapter([], 10), null);
 });
 
 test('formatTimestamp formats mm:ss and hh:mm:ss cleanly', () => {

@@ -114,7 +114,13 @@
       "properties": {
         "roomId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "hostId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hostName": { "type": "string", "maxLength": 80 },
         "guestId": { "type": "string", "maxLength": 128 },
+        "guestLabel": { "type": "string", "maxLength": 40 },
+        "hostPartnerRole": { "type": "string", "enum": ["bf", "gf"] },
+        "guestPartnerRole": { "type": "string", "enum": ["bf", "gf"] },
+        "hostSeatId": { "type": "string", "maxLength": 8 },
+        "guestSeatId": { "type": "string", "maxLength": 8 },
         "inviteCode": { "type": "string", "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "movieId": { "type": "string", "maxLength": 128 },
@@ -131,20 +137,26 @@
     },
     "RoomParticipant": {
       "title": "RoomParticipant",
-      "description": "Participant membership and presence inside a cinema room.",
+      "description": "Participant membership, seat, BF/GF role, and presence inside a cinema room.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "maxLength": 80 },
         "role": { "type": "string", "enum": ["host", "guest"] },
+        "partnerRole": { "type": "string", "enum": ["bf", "gf"] },
+        "seatId": { "type": "string", "maxLength": 8 },
+        "seatLabel": { "type": "string", "maxLength": 60 },
+        "roomHostId": { "type": "string", "maxLength": 128 },
+        "roomGuestId": { "type": "string", "maxLength": 128 },
         "online": { "type": "boolean" },
-        "joinedAt": { "type": "string", "format": "date-time" }
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "displayName", "role", "online", "joinedAt"]
     },
     "PlaybackState": {
       "title": "PlaybackState",
-      "description": "Authoritative playback timestamp and state for a cinema room.",
+      "description": "Authoritative playback timestamp, scene/chapter, screen mode, and media state for a cinema room.",
       "type": "object",
       "properties": {
         "roomId": { "type": "string", "maxLength": 128 },
@@ -154,6 +166,18 @@
         "playbackRate": { "type": "number" },
         "hostId": { "type": "string", "maxLength": 128 },
         "revision": { "type": "number" },
+        "quality": { "type": "string", "maxLength": 20 },
+        "audioMode": { "type": "string", "maxLength": 40 },
+        "screenMode": { "type": "string", "maxLength": 40 },
+        "activeChapterId": { "type": "string", "maxLength": 128 },
+        "updatedById": { "type": "string", "maxLength": 128 },
+        "updatedByName": { "type": "string", "maxLength": 80 },
+        "lastAction": { "type": "string", "maxLength": 32 },
+        "activeMovieTitle": { "type": "string", "maxLength": 160 },
+        "activeMovieStreamUrl": { "type": "string", "maxLength": 500 },
+        "activeMovieThumbnailUrl": { "type": "string", "maxLength": 500 },
+        "activeMovieDurationSeconds": { "type": "number" },
+        "updatedAtMs": { "type": "number" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["roomId", "movieId", "currentTime", "playing", "playbackRate", "revision", "updatedAt"]
@@ -164,14 +188,37 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomId": { "type": "string", "maxLength": 128 },
+        "roomHostId": { "type": "string", "maxLength": 128 },
+        "roomGuestId": { "type": "string", "maxLength": 128 },
         "senderId": { "type": "string", "maxLength": 128 },
         "senderName": { "type": "string", "maxLength": 80 },
         "text": { "type": "string", "maxLength": 1200 },
         "type": { "type": "string", "enum": ["text", "gif", "voice", "snack"] },
+        "gifUrl": { "type": "string", "maxLength": 500 },
+        "voiceDurationSec": { "type": "number" },
         "replyToId": { "type": "string", "maxLength": 128 },
+        "replyPreview": { "type": "string", "maxLength": 160 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "senderId", "senderName", "text", "type", "createdAt"]
+    },
+    "CoupleInteraction": {
+      "title": "CoupleInteraction",
+      "description": "Live couple interaction reaction synchronized inside a cinema room.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomId": { "type": "string", "maxLength": 128 },
+        "roomHostId": { "type": "string", "maxLength": 128 },
+        "roomGuestId": { "type": "string", "maxLength": 128 },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 80 },
+        "kind": { "type": "string", "maxLength": 40 },
+        "label": { "type": "string", "maxLength": 120 },
+        "createdAtMs": { "type": "number" }
+      },
+      "required": ["id", "roomId", "senderId", "senderName", "kind", "label", "createdAtMs"]
     },
     "WatchlistItem": {
       "title": "WatchlistItem",
@@ -269,6 +316,10 @@
     "/cinemaRooms/{roomId}/chatMessages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },
       "description": "Live cinema room chat messages."
+    },
+    "/cinemaRooms/{roomId}/interactions/{interactionId}": {
+      "schema": { "$ref": "#/entities/CoupleInteraction" },
+      "description": "Live couple interaction events inside a cinema room."
     },
     "/watchlists/{itemId}": {
       "schema": { "$ref": "#/entities/WatchlistItem" },

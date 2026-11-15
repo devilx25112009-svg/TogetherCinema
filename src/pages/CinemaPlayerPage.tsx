@@ -48,6 +48,15 @@ import { CinemaAuditoriumScene } from '../components/three/CinemaAuditoriumScene
 import { useAuth } from '../context/AuthContext';
 import { cinemaApi } from '../lib/api';
 import {
+  ensureCloudRoomJoined,
+  pushCloudChatMessage,
+  pushCloudCoupleInteraction,
+  pushCloudPlaybackState,
+  pushCloudRoomSeatsAndRoles,
+  pushCloudRoomSource,
+  subscribeToCloudRoom,
+} from '../lib/firestoreSync';
+import {
   getLocalAudioStreamUrl,
   getLocalMediaFileInfo,
   getLocalMediaStreamUrl,
@@ -68,6 +77,7 @@ import type {
   CoupleInteractionKind,
   CoupleReactionEvent,
   MovieRecord,
+  PartnerGenderRole,
   PlaybackState,
   QualityOption,
   RoomParticipant,
@@ -83,12 +93,17 @@ import {
   evaluatePlaybackDrift,
   formatTimestamp,
   projectAuthoritativeTime,
+  resolveActiveChapter,
+  shouldAcceptIncomingPlaybackState,
   shouldApplyMediaDriftCorrection,
+  shouldForceImmediateSyncSeek,
   type PlaybackCommandInput,
 } from '../utils/playbackSync';
 import { COUPLE_INTERACTION_OPTIONS } from '../utils/coupleInteractions';
 import { computeAvailableRenditions } from '../utils/uploadLogic';
 import {
+  formatPartnerRoleBadge,
+  resolveCoupleRoles,
   resolveCoupleSeats,
   resolveDefaultViewerRole,
   type ViewerSeatRole,
@@ -117,7 +132,7 @@ const ALL_SCREEN_MODES: ScreenMode[] = [
 export function CinemaPlayerPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [searchParams] = useSearchParams();
-  const { user } = useAuth();
+  const { user, firebaseUser } = useAuth();
   const initialTheatreMode = searchParams.get('theatre') === '1';
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -132,6 +147,10 @@ export function CinemaPlayerPage() {
   const companionAudioInputRef = useRef<HTMLInputElement | null>(null);
   const audioEngineRef = useRef<TheatreAudioEngine | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const localClientIdRef = useRef(`tab_${Math.random().toString(36).slice(2, 9)}`);
+  const serverClockOffsetMsRef = useRef(0);
+  const cloudMembershipRef = useRef<{ roomHostId: string; roomGuestId?: string } | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
   const webcamStreamRef = useRef<MediaStream | null>(null);
@@ -147,6 +166,7 @@ export function CinemaPlayerPage() {
   const [wsConnected, setWsConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [syncTransport, setSyncTransport] = useState<'ws' | 'http'>('ws');
+  const [cloudSynced, setCloudSynced] = useState(false);
   const lastReactionSyncRef = useRef<number>(Date.now());
 
   // Local player & UI states
@@ -158,13 +178,9 @@ export function CinemaPlayerPage() {
     auditoriumOnlyParam: searchParams.get('auditoriumOnly'),
     inviteParam,
   });
-  const [viewerRoleOverride, setViewerRoleOverride] = useState<ViewerSeatRole | null>(() => {
-    if (auditoriumOnly) return 'guest';
-    const param = searchParams.get('seat')?.trim().toLowerCase();
-    if (param === 'gf' || param === 'guest') return 'guest';
-    if (param === 'me' || param === 'host') return 'host';
-    return null;
-  });
+  const [viewerRoleOverride, setViewerRoleOverride] = useState<ViewerSeatRole | null>(() =>
+    auditoriumOnly ? 'guest' : null
+  );
   const [screenMode, setScreenMode] = useState<ScreenMode>('Screen X');
   const [audioMode, setAudioMode] = useState<AudioMode>('Original Audio');
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<string>('');
@@ -230,10 +246,106 @@ export function CinemaPlayerPage() {
     playbackRef.current = playback;
   }, [playback]);
 
+  const roomRef = useRef<CinemaRoomRecord | null>(null);
+  useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
+
+  const movieRef = useRef<MovieRecord | null>(null);
+  useEffect(() => {
+    movieRef.current = movie;
+  }, [movie]);
+
   const participantsRef = useRef<RoomParticipant[]>([]);
   useEffect(() => {
     participantsRef.current = participants;
   }, [participants]);
+
+  const resetLocalMediaOverrides = useCallback(() => {
+    setLocalOverrideUrl(null);
+    setLocalFileLabel(null);
+    setCompanionAudioUrl(null);
+    setCompanionAudioLabel(null);
+    setContainerAudioInfo(null);
+    setSilentAudioDetected(false);
+    setUseCompatStream(false);
+    setDetectedDuration(0);
+  }, []);
+
+  const applyIncomingPlaybackState = useCallback(
+    (incoming: PlaybackState, incomingMovie?: MovieRecord | null) => {
+      if (!shouldAcceptIncomingPlaybackState(playbackRef.current, incoming)) {
+        return;
+      }
+      const movieChanged = Boolean(movieRef.current && incoming.movieId !== movieRef.current.id);
+      playbackRef.current = incoming;
+      setPlayback(incoming);
+      setScreenMode(incoming.screenMode);
+      setAudioMode(incoming.audioMode);
+
+      const syncedNow = Date.now() + serverClockOffsetMsRef.current;
+      const targetTime = projectAuthoritativeTime(incoming, syncedNow);
+      const vid = videoElRef.current;
+      const comp = companionAudioRef.current;
+      const knownDur =
+        vid && Number.isFinite(vid.duration) && vid.duration > 0
+          ? vid.duration
+          : incomingMovie?.durationSeconds ||
+            incoming.activeMovieDurationSeconds ||
+            movieRef.current?.durationSeconds ||
+            0;
+      const clampedTarget = knownDur > 0 ? Math.min(knownDur, targetTime) : targetTime;
+      setDisplayTime(clampedTarget);
+
+      if (vid && !movieChanged && vid.readyState >= 1) {
+        if (shouldForceImmediateSyncSeek(vid.currentTime, clampedTarget, incoming.lastAction)) {
+          vid.currentTime = clampedTarget;
+          if (comp && comp.src) {
+            comp.currentTime = clampedTarget;
+          }
+        }
+        if (incoming.playing && vid.paused && !vid.ended) {
+          vid.play().catch(() => {});
+        } else if (!incoming.playing && !vid.paused) {
+          vid.pause();
+          comp?.pause();
+        }
+      }
+
+      if (incomingMovie) {
+        if (movieChanged) resetLocalMediaOverrides();
+        setMovie(incomingMovie);
+      } else if (movieChanged && incoming.activeMovieStreamUrl) {
+        resetLocalMediaOverrides();
+        setMovie({
+          id: incoming.movieId,
+          ownerId: incoming.hostId || roomRef.current?.hostId || 'host',
+          title: incoming.activeMovieTitle || roomRef.current?.name || 'Synced Cinema',
+          description: 'Synchronized cloud screening',
+          genre: 'Cloud Theatre',
+          durationSeconds: incoming.activeMovieDurationSeconds || 5400,
+          fileSizeBytes: 0,
+          resolution: '1080p Full HD',
+          sourceHeight: 1080,
+          stereoscopicFormat: 'none',
+          videoFormat: incoming.activeMovieStreamUrl.startsWith('youtube://') ? 'YouTube Stream' : 'Stream',
+          audioFormat: 'Stereo',
+          subtitles: [{ id: 'sub-en', label: 'English', language: 'en' }],
+          audioTracks: [{ id: 'aud-1', label: 'Original Audio', language: 'en', channels: '2.0' }],
+          chapters: incoming.activeMovieChapters || [{ id: 'ch-1', title: '01. Start', timeSeconds: 0 }],
+          thumbnailUrl: incoming.activeMovieThumbnailUrl || '/images/poster_midnight_orbit_1794680182030.jpg',
+          streamUrl: incoming.activeMovieStreamUrl,
+          processingStatus: 'ready',
+          collectionName: 'Cloud Sync',
+          playbackProgress: 0,
+          isFavourite: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    },
+    [resetLocalMediaOverrides]
+  );
 
   useEffect(() => {
     const engine = new TheatreAudioEngine();
@@ -265,25 +377,107 @@ export function CinemaPlayerPage() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Initial HTTP room load
+  // Same-browser instant BroadcastChannel sync + multi-tab fallback
+  useEffect(() => {
+    if (!roomId || typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(`together-cinema-room-${roomId}`);
+    broadcastChannelRef.current = channel;
+    channel.onmessage = (ev) => {
+      const msg = ev.data as { senderClientId?: string; type?: string; [k: string]: unknown };
+      if (!msg || msg.senderClientId === localClientIdRef.current) return;
+      if (msg.type === 'playback:state' && msg.playbackState) {
+        applyIncomingPlaybackState(msg.playbackState as PlaybackState);
+      } else if (msg.type === 'room:seats' && msg.room) {
+        setRoom(msg.room as CinemaRoomRecord);
+        if (msg.participants) setParticipants(msg.participants as RoomParticipant[]);
+      } else if (msg.type === 'room:source') {
+        if (msg.room) setRoom(msg.room as CinemaRoomRecord);
+        if (msg.playbackState) {
+          applyIncomingPlaybackState(msg.playbackState as PlaybackState, msg.movie as MovieRecord | undefined);
+        }
+      } else if (msg.type === 'chat:message' && msg.message) {
+        const entry = msg.message as ChatMessageRecord;
+        setMessages((prev) => (prev.some((m) => m.id === entry.id) ? prev : [...prev, entry]));
+      } else if (msg.type === 'couple:interaction' && msg.event) {
+        const evItem = msg.event as CoupleReactionEvent;
+        setReactions((prev) => (prev.some((r) => r.id === evItem.id) ? prev : [...prev.slice(-8), evItem]));
+        window.setTimeout(() => {
+          setReactions((prev) => prev.filter((r) => r.id !== evItem.id));
+        }, 3000);
+      }
+    };
+    return () => {
+      channel.close();
+      broadcastChannelRef.current = null;
+    };
+  }, [roomId, applyIncomingPlaybackState]);
+
+  // Initial HTTP room load & Firebase Firestore Cloud subscription
   useEffect(() => {
     if (!roomId) return;
     let active = true;
+    let unsubFirestore: (() => void) | undefined;
+
     cinemaApi
-      .getRoom(roomId)
-      .then((res) => {
+      .getRoom(roomId, user)
+      .then(async (res) => {
         if (!active) return;
+        if (typeof res.serverTime === 'number') {
+          serverClockOffsetMsRef.current = res.serverTime - Date.now();
+        }
         setRoom(res.room);
         setMovie(res.movie);
-        setPlayback(res.playbackState);
+        if (res.playbackState) {
+          playbackRef.current = res.playbackState;
+          setPlayback(res.playbackState);
+          const projected = projectAuthoritativeTime(
+            res.playbackState,
+            Date.now() + serverClockOffsetMsRef.current
+          );
+          setDisplayTime(projected);
+        }
         setParticipants(res.participants);
         setMessages(res.chatHistory);
         setScreenMode(res.playbackState?.screenMode || res.room.defaultScreenMode);
         setAudioMode(res.playbackState?.audioMode || res.room.defaultAudio);
         if (res.movie?.audioTracks[0]) setSelectedAudioTrack(res.movie.audioTracks[0].id);
-        setDisplayTime(res.playbackState?.currentTime || 0);
         if (inviteParam && isPartnerInviteValid(inviteParam, res.room.inviteCode)) {
           cinemaApi.joinRoom(inviteParam, user).catch(() => {});
+        }
+
+        if (firebaseUser) {
+          const membership = await ensureCloudRoomJoined(res.room, res.movie, res.playbackState, firebaseUser);
+          if (!active || !membership) return;
+          cloudMembershipRef.current = membership;
+          setCloudSynced(true);
+          unsubFirestore = subscribeToCloudRoom(roomId, firebaseUser, membership, {
+            onRoom: (cloudRoom) => {
+              setRoom((prev) => (prev ? { ...prev, ...cloudRoom } : (cloudRoom as CinemaRoomRecord)));
+            },
+            onPlayback: (cloudPb) => {
+              applyIncomingPlaybackState(cloudPb);
+            },
+            onParticipants: (list) => {
+              if (list.length > 0) setParticipants(list);
+            },
+            onChats: (list) => {
+              if (list.length > 0) {
+                setMessages((prev) => {
+                  const map = new Map(prev.map((m) => [m.id, m]));
+                  for (const m of list) map.set(m.id, m);
+                  return Array.from(map.values()).sort(
+                    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)
+                  );
+                });
+              }
+            },
+            onInteraction: (evItem) => {
+              setReactions((prev) => (prev.some((r) => r.id === evItem.id) ? prev : [...prev.slice(-8), evItem]));
+              window.setTimeout(() => {
+                setReactions((prev) => prev.filter((r) => r.id !== evItem.id));
+              }, 3000);
+            },
+          });
         }
       })
       .catch((err) => {
@@ -295,8 +489,9 @@ export function CinemaPlayerPage() {
 
     return () => {
       active = false;
+      unsubFirestore?.();
     };
-  }, [roomId, inviteParam, user]);
+  }, [roomId, inviteParam, user, firebaseUser, applyIncomingPlaybackState]);
 
   // WebSocket real-time synchronization & chat (auto-falls back to HTTP Live Sync on serverless hosts like Vercel)
   useEffect(() => {
@@ -330,37 +525,29 @@ export function CinemaPlayerPage() {
           const data = JSON.parse(String(ev.data)) as { type: string; [key: string]: unknown };
           if (data.type === 'room:init') {
             if (data.room) setRoom(data.room as CinemaRoomRecord);
-            const pState = data.playbackState as PlaybackState;
-            setPlayback(pState);
-            setScreenMode(pState.screenMode);
-            setAudioMode(pState.audioMode);
-            setParticipants(data.participants as RoomParticipant[]);
-            setMessages(data.chatHistory as ChatMessageRecord[]);
+            const pState = data.playbackState as PlaybackState | undefined;
+            if (pState) {
+              applyIncomingPlaybackState(pState);
+            }
+            if (data.participants) setParticipants(data.participants as RoomParticipant[]);
+            if (data.chatHistory) setMessages(data.chatHistory as ChatMessageRecord[]);
           } else if (data.type === 'room:seats') {
             if (data.room) setRoom(data.room as CinemaRoomRecord);
             if (data.participants) setParticipants(data.participants as RoomParticipant[]);
           } else if (data.type === 'playback:state') {
             const pState = data.playbackState as PlaybackState;
-            setPlayback(pState);
-            setDisplayTime(pState.currentTime || 0);
-            setScreenMode(pState.screenMode);
-            setAudioMode(pState.audioMode);
+            applyIncomingPlaybackState(pState);
           } else if (data.type === 'room:source') {
             if (data.room) setRoom(data.room as CinemaRoomRecord);
-            if (data.movie) setMovie(data.movie as MovieRecord);
             if (data.playbackState) {
-              const pState = data.playbackState as PlaybackState;
-              setPlayback(pState);
-              setDisplayTime(pState.currentTime || 0);
+              applyIncomingPlaybackState(
+                data.playbackState as PlaybackState,
+                data.movie as MovieRecord | undefined
+              );
+            } else if (data.movie) {
+              resetLocalMediaOverrides();
+              setMovie(data.movie as MovieRecord);
             }
-            setLocalOverrideUrl(null);
-            setLocalFileLabel(null);
-            setCompanionAudioUrl(null);
-            setCompanionAudioLabel(null);
-            setContainerAudioInfo(null);
-            setSilentAudioDetected(false);
-            setUseCompatStream(false);
-            setDetectedDuration(0);
           } else if (data.type === 'room:participants') {
             setParticipants(data.participants as RoomParticipant[]);
           } else if (data.type === 'chat:message') {
@@ -379,7 +566,7 @@ export function CinemaPlayerPage() {
             }
           } else if (data.type === 'couple:interaction') {
             const evItem = data.event as CoupleReactionEvent;
-            setReactions((prev) => [...prev.slice(-8), evItem]);
+            setReactions((prev) => (prev.some((r) => r.id === evItem.id) ? prev : [...prev.slice(-8), evItem]));
             window.setTimeout(() => {
               setReactions((prev) => prev.filter((r) => r.id !== evItem.id));
             }, 3000);
@@ -409,31 +596,47 @@ export function CinemaPlayerPage() {
       clearTimeout(reconnectTimer);
       wsRef.current?.close();
     };
-  }, [roomId, user?.uid, user?.displayName]);
+  }, [roomId, user?.uid, user?.displayName, applyIncomingPlaybackState, resetLocalMediaOverrides]);
 
-  // HTTP Live Sync polling fallback for serverless Node.js environments (Vercel)
+  // HTTP Live Sync polling (active when WS unavailable, or background reconcile every 2.5s across serverless instances)
   useEffect(() => {
-    if (!roomId || syncTransport !== 'http') return;
+    if (!roomId) return;
     let active = true;
 
     const poll = async () => {
       try {
-        const res = await cinemaApi.syncRoom(roomId, lastReactionSyncRef.current);
+        const res = await cinemaApi.syncRoom(roomId, lastReactionSyncRef.current, user);
         if (!active) return;
+        serverClockOffsetMsRef.current = res.serverTime - Date.now();
         lastReactionSyncRef.current = res.serverTime;
 
-        if (res.room) setRoom(res.room);
-        if (res.movie) {
-          setMovie((prev) => (prev?.id === res.movie?.id ? prev : res.movie));
+        if (res.room) {
+          setRoom((prev) => {
+            if (!prev) return res.room;
+            const prevUpdated = Date.parse(prev.updatedAt || '') || 0;
+            const nextUpdated = Date.parse(res.room.updatedAt || '') || 0;
+            return nextUpdated >= prevUpdated ? res.room : prev;
+          });
         }
-        if (res.playbackState && res.playbackState.revision > (playbackRef.current?.revision || 0)) {
-          setPlayback(res.playbackState);
-          setDisplayTime(res.playbackState.currentTime || 0);
-          setScreenMode(res.playbackState.screenMode);
-          setAudioMode(res.playbackState.audioMode);
+        if (res.playbackState) {
+          applyIncomingPlaybackState(res.playbackState, res.movie);
+        } else if (res.movie && res.movie.id !== movieRef.current?.id) {
+          resetLocalMediaOverrides();
+          setMovie(res.movie);
         }
-        if (res.participants) setParticipants(res.participants);
-        if (res.chatHistory) setMessages(res.chatHistory);
+        if (res.participants?.length) setParticipants(res.participants);
+        if (res.chatHistory?.length) {
+          setMessages((prev) => {
+            if (prev.length === res.chatHistory.length && prev[prev.length - 1]?.id === res.chatHistory[res.chatHistory.length - 1]?.id) {
+              return prev;
+            }
+            const map = new Map(prev.map((m) => [m.id, m]));
+            for (const m of res.chatHistory) map.set(m.id, m);
+            return Array.from(map.values()).sort(
+              (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)
+            );
+          });
+        }
         if (res.reactions?.length) {
           for (const rawEv of res.reactions) {
             const evItem = rawEv as CoupleReactionEvent;
@@ -448,12 +651,13 @@ export function CinemaPlayerPage() {
       }
     };
 
-    const interval = window.setInterval(poll, 1500);
+    const intervalMs = syncTransport === 'http' ? 950 : 2600;
+    const interval = window.setInterval(poll, intervalMs);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, [roomId, syncTransport]);
+  }, [roomId, syncTransport, user, applyIncomingPlaybackState, resetLocalMediaOverrides]);
 
   // Attach real video source, server FFmpeg compat stream, instant local 35GB+ PC file, or HLS.js stream
   const registryLocalUrl = getLocalMediaStreamUrl(movie?.id, roomId);
@@ -538,6 +742,20 @@ export function CinemaPlayerPage() {
       if (Number.isFinite(vid.duration) && vid.duration > 0) {
         setDetectedDuration(Math.round(vid.duration));
       }
+      if (playbackRef.current) {
+        const target = projectAuthoritativeTime(
+          playbackRef.current,
+          Date.now() + serverClockOffsetMsRef.current
+        );
+        if (target > 0.5 && Math.abs(vid.currentTime - target) > 0.75) {
+          const clamped =
+            Number.isFinite(vid.duration) && vid.duration > 0 ? Math.min(vid.duration, target) : target;
+          vid.currentTime = clamped;
+          if (companionAudioRef.current && companionAudioRef.current.src) {
+            companionAudioRef.current.currentTime = clamped;
+          }
+        }
+      }
       const tracks = (vid as unknown as { audioTracks?: { length: number; [k: number]: { enabled: boolean } } })
         .audioTracks;
       if (tracks && typeof tracks.length === 'number') {
@@ -582,7 +800,7 @@ export function CinemaPlayerPage() {
       const pState = playbackRef.current;
       if (!pState) return;
 
-      const authoritative = projectAuthoritativeTime(pState, Date.now());
+      const authoritative = projectAuthoritativeTime(pState, Date.now() + serverClockOffsetMsRef.current);
       const vid = videoElRef.current;
       const knownDur =
         vid && Number.isFinite(vid.duration) && vid.duration > 0
@@ -704,21 +922,31 @@ export function CinemaPlayerPage() {
       const comp = companionAudioRef.current;
 
       // Apply optimistic local update immediately so scrubbing/jumping inside YouTube or timeline never snaps back
+      let optimisticState: PlaybackState | null = null;
       if (playbackRef.current) {
-        const optimistic = applyAuthoritativeCommand(
+        optimisticState = applyAuthoritativeCommand(
           playbackRef.current,
           command as unknown as PlaybackCommandInput,
-          Date.now()
+          Date.now() + serverClockOffsetMsRef.current,
+          { userId: user?.uid || 'guest-viewer', displayName: user?.displayName || 'You' }
         );
-        playbackRef.current = optimistic;
-        setPlayback(optimistic);
+        playbackRef.current = optimisticState;
+        setPlayback(optimisticState);
         if (
           command.action === 'seek' ||
           command.action === 'chapter' ||
           command.action === 'play' ||
           command.action === 'pause'
         ) {
-          setDisplayTime(optimistic.currentTime);
+          setDisplayTime(optimisticState.currentTime);
+        }
+        broadcastChannelRef.current?.postMessage({
+          senderClientId: localClientIdRef.current,
+          type: 'playback:state',
+          playbackState: optimisticState,
+        });
+        if (firebaseUser && roomRef.current) {
+          void pushCloudPlaybackState(roomRef.current, optimisticState, movieRef.current).catch(() => {});
         }
       }
 
@@ -749,12 +977,24 @@ export function CinemaPlayerPage() {
         cinemaApi
           .postRoomEvent(roomId, { type: 'playback:command', command }, user)
           .then((res) => {
-            if (res.playbackState) setPlayback(res.playbackState);
+            if (res.playbackState) {
+              applyIncomingPlaybackState(res.playbackState);
+            }
           })
           .catch(() => {});
       }
     },
-    [companionAudioUrl, isProceduralVideo, muted, roomId, unlockTheatreAudio, user, volume]
+    [
+      applyIncomingPlaybackState,
+      companionAudioUrl,
+      firebaseUser,
+      isProceduralVideo,
+      muted,
+      roomId,
+      unlockTheatreAudio,
+      user,
+      volume,
+    ]
   );
 
   // Theatre keyboard shortcuts
@@ -842,6 +1082,14 @@ export function CinemaPlayerPage() {
           if (res.message) {
             const msg = res.message;
             setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+            broadcastChannelRef.current?.postMessage({
+              senderClientId: localClientIdRef.current,
+              type: 'chat:message',
+              message: msg,
+            });
+            if (firebaseUser && roomRef.current) {
+              void pushCloudChatMessage(roomRef.current, msg).catch(() => {});
+            }
           }
         })
         .catch(() => {});
@@ -851,24 +1099,32 @@ export function CinemaPlayerPage() {
   };
 
   const handleCoupleInteraction = (kind: CoupleInteractionKind) => {
+    const opt = COUPLE_INTERACTION_OPTIONS.find((o) => o.kind === kind);
+    const localEv: CoupleReactionEvent = {
+      id: `react-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      roomId: roomId || 'room',
+      senderId: user?.uid || 'guest-viewer',
+      senderName: user?.displayName || 'You',
+      kind,
+      label: opt?.label || 'Sent love',
+      createdAt: Date.now(),
+    };
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'couple:interaction', kind }));
     } else if (roomId) {
       cinemaApi.postRoomEvent(roomId, { type: 'couple:interaction', kind }, user).catch(() => {});
-      const opt = COUPLE_INTERACTION_OPTIONS.find((o) => o.kind === kind);
-      const localEv: CoupleReactionEvent = {
-        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        roomId,
-        senderId: user?.uid || 'guest-viewer',
-        senderName: user?.displayName || 'You',
-        kind,
-        label: opt?.label || 'Sent love',
-        createdAt: Date.now(),
-      };
       setReactions((prev) => [...prev.slice(-8), localEv]);
       window.setTimeout(() => {
         setReactions((prev) => prev.filter((r) => r.id !== localEv.id));
       }, 3000);
+    }
+    broadcastChannelRef.current?.postMessage({
+      senderClientId: localClientIdRef.current,
+      type: 'couple:interaction',
+      event: localEv,
+    });
+    if (firebaseUser && roomRef.current) {
+      void pushCloudCoupleInteraction(roomRef.current, localEv).catch(() => {});
     }
   };
 
@@ -1000,33 +1256,72 @@ export function CinemaPlayerPage() {
   const isLocalBlobSource = effectiveStreamUrl.startsWith('blob:');
   const activeDspProfile = buildTheatreDspProfile(audioMode);
   const coupleSeats = resolveCoupleSeats(room.hostSeatId, room.guestSeatId);
+  const coupleRoles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
+  const hostRoleBadge = formatPartnerRoleBadge(coupleRoles.hostPartnerRole);
+  const guestRoleBadge = formatPartnerRoleBadge(coupleRoles.guestPartnerRole);
   const defaultViewerRole = resolveDefaultViewerRole({
     userId: user?.uid,
     roomHostId: room.hostId,
     seatParam: searchParams.get('seat'),
+    hostPartnerRole: coupleRoles.hostPartnerRole,
+    guestPartnerRole: coupleRoles.guestPartnerRole,
   });
   const viewerSeatRole: ViewerSeatRole = viewerRoleOverride ?? defaultViewerRole;
+  const viewerPartnerRole: PartnerGenderRole =
+    viewerSeatRole === 'guest' ? coupleRoles.guestPartnerRole : coupleRoles.hostPartnerRole;
   const activeViewerSeat = viewerSeatRole === 'guest' ? coupleSeats.guestSeat : coupleSeats.hostSeat;
+  const activeChapter = resolveActiveChapter(movie?.chapters, displayTime);
 
   const handleUpdateCoupleSeats = async (next: {
     hostSeatId: string;
     guestSeatId: string;
+    hostName?: string;
     guestLabel?: string;
+    hostPartnerRole?: PartnerGenderRole;
+    guestPartnerRole?: PartnerGenderRole;
   }) => {
     if (!roomId) return;
-    setRoom((prev) =>
-      prev
-        ? {
-            ...prev,
-            hostSeatId: next.hostSeatId,
-            guestSeatId: next.guestSeatId,
-            guestLabel: next.guestLabel ?? prev.guestLabel,
-          }
-        : prev
+    const nextRoles = resolveCoupleRoles(
+      next.hostPartnerRole ?? coupleRoles.hostPartnerRole,
+      next.guestPartnerRole ?? coupleRoles.guestPartnerRole
     );
+    const optimisticRoom: CinemaRoomRecord = {
+      ...room,
+      hostSeatId: next.hostSeatId,
+      guestSeatId: next.guestSeatId,
+      hostName: next.hostName ?? room.hostName,
+      guestLabel: next.guestLabel ?? room.guestLabel,
+      hostPartnerRole: nextRoles.hostPartnerRole,
+      guestPartnerRole: nextRoles.guestPartnerRole,
+      updatedAt: new Date().toISOString(),
+    };
+    setRoom(optimisticRoom);
+    broadcastChannelRef.current?.postMessage({
+      senderClientId: localClientIdRef.current,
+      type: 'room:seats',
+      room: optimisticRoom,
+    });
+    if (firebaseUser) {
+      void pushCloudRoomSeatsAndRoles(optimisticRoom, {
+        hostSeatId: next.hostSeatId,
+        guestSeatId: next.guestSeatId,
+        hostName: optimisticRoom.hostName,
+        guestLabel: optimisticRoom.guestLabel,
+        hostPartnerRole: nextRoles.hostPartnerRole,
+        guestPartnerRole: nextRoles.guestPartnerRole,
+      }).catch(() => {});
+    }
     setSavingSeats(true);
     try {
-      const res = await cinemaApi.updateRoomSeats(roomId, next, user);
+      const res = await cinemaApi.updateRoomSeats(
+        roomId,
+        {
+          ...next,
+          hostPartnerRole: nextRoles.hostPartnerRole,
+          guestPartnerRole: nextRoles.guestPartnerRole,
+        },
+        user
+      );
       setRoom(res.room);
       setParticipants(res.participants);
     } catch (err) {
@@ -1067,16 +1362,20 @@ export function CinemaPlayerPage() {
       );
       setRoom(res.room);
       setMovie(res.movie);
+      playbackRef.current = res.playbackState;
       setPlayback(res.playbackState);
       setDisplayTime(res.playbackState.currentTime || 0);
-      setLocalOverrideUrl(null);
-      setLocalFileLabel(null);
-      setCompanionAudioUrl(null);
-      setCompanionAudioLabel(null);
-      setContainerAudioInfo(null);
-      setSilentAudioDetected(false);
-      setUseCompatStream(false);
-      setDetectedDuration(0);
+      resetLocalMediaOverrides();
+      broadcastChannelRef.current?.postMessage({
+        senderClientId: localClientIdRef.current,
+        type: 'room:source',
+        room: res.room,
+        movie: res.movie,
+        playbackState: res.playbackState,
+      });
+      if (firebaseUser) {
+        void pushCloudRoomSource(res.room, res.movie, res.playbackState).catch(() => {});
+      }
       setYtModalOpen(false);
       setYtUrlInput('');
       setNoticeBanner(`YouTube loaded in 3D theatre: "${res.movie.title}".`);
@@ -1088,7 +1387,12 @@ export function CinemaPlayerPage() {
   };
 
   const originUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const partnerAuditoriumUrl = buildPartnerAuditoriumLink(originUrl, room.roomId, room.inviteCode);
+  const partnerAuditoriumUrl = buildPartnerAuditoriumLink(
+    originUrl,
+    room.roomId,
+    room.inviteCode,
+    coupleRoles.guestPartnerRole
+  );
   const partnerShortJoinUrl = buildShortPartnerJoinLink(originUrl, room.inviteCode);
 
   const handleCopyPartnerLink = (urlToCopy: string) => {
@@ -1142,6 +1446,11 @@ export function CinemaPlayerPage() {
         className="absolute inset-0 z-0"
         data-viewer-seat={activeViewerSeat.id}
         data-viewer-role={viewerSeatRole}
+        data-viewer-partner-role={viewerPartnerRole}
+        data-host-partner-role={coupleRoles.hostPartnerRole}
+        data-guest-partner-role={coupleRoles.guestPartnerRole}
+        data-playback-revision={playback?.revision || 1}
+        data-active-chapter={activeChapter?.id || ''}
       >
         <CinemaAuditoriumScene
           videoEl={videoEl}
@@ -1156,6 +1465,8 @@ export function CinemaPlayerPage() {
           suppressScreenLabel={isYouTube}
           hostSeatId={coupleSeats.hostSeat.id}
           guestSeatId={coupleSeats.guestSeat.id}
+          hostPartnerRole={coupleRoles.hostPartnerRole}
+          guestPartnerRole={coupleRoles.guestPartnerRole}
           viewerSeatRole={viewerSeatRole}
         />
       </div>
@@ -1229,7 +1540,11 @@ export function CinemaPlayerPage() {
             {!isMobileViewport && (
               <p className="text-[11px] text-[#C4B5FD] truncate" data-testid="seat-pov-status">
                 {localFileLabel || movie?.title} · {screenMode} · Seat {activeViewerSeat.id} (
-                {viewerSeatRole === 'guest' ? room.guestLabel || 'My GF' : 'Your Seat'})
+                {viewerSeatRole === 'guest'
+                  ? `${guestRoleBadge} · ${room.guestLabel || 'Partner'}`
+                  : `${hostRoleBadge} · ${room.hostName || 'Host'}`}
+                )
+                {activeChapter ? ` · ${activeChapter.title}` : ''}
                 {dspActive && theatreDspEnabled ? ' · Theatre Surround DSP' : ''} · Sync Rev #{playback?.revision || 1}
               </p>
             )}
@@ -1249,7 +1564,13 @@ export function CinemaPlayerPage() {
                   <Users className="w-3.5 h-3.5 text-[#F472B6]" />
                   <span>
                     {participants.filter((p) => p.online).length || 1} seated
-                    {wsConnected ? ' · Live Sync' : syncTransport === 'http' ? ' · Cloud Sync' : ''}
+                    {cloudSynced
+                      ? ' · Cloud Server'
+                      : wsConnected
+                      ? ' · Live Sync'
+                      : syncTransport === 'http'
+                      ? ' · Cloud Sync'
+                      : ''}
                   </span>
                 </span>
               )}
@@ -1284,11 +1605,11 @@ export function CinemaPlayerPage() {
                     data-testid="open-seat-map-btn"
                     onClick={() => setSeatMapOpen(true)}
                     className="px-3 py-1.5 rounded-lg bg-[#1C1930] border border-[#8B5CF6]/40 text-xs text-slate-100 hover:border-[#F472B6] flex items-center gap-1.5 cursor-pointer"
-                    title="Open 72-seat auditorium map to choose where you and your GF sit"
+                    title="Open 72-seat auditorium map & adjust who is BF and who is GF"
                   >
                     <Armchair className="w-3.5 h-3.5 text-[#F472B6]" />
                     <span>
-                      Seats ({coupleSeats.hostSeat.id}·{coupleSeats.guestSeat.id})
+                      {hostRoleBadge} {coupleSeats.hostSeat.id} · {guestRoleBadge} {coupleSeats.guestSeat.id}
                     </span>
                   </button>
                 </>
@@ -1919,22 +2240,26 @@ export function CinemaPlayerPage() {
                     onClick={() => setViewerRoleOverride('host')}
                     className={`px-2.5 py-1 rounded text-xs cursor-pointer ${
                       viewerSeatRole === 'host'
-                        ? 'bg-[#8B5CF6] text-white font-semibold'
+                        ? coupleRoles.hostPartnerRole === 'bf'
+                          ? 'bg-[#8B5CF6] text-white font-semibold'
+                          : 'bg-[#F472B6] text-[#080810] font-semibold'
                         : 'bg-[#0B1020] text-slate-300 hover:text-white'
                     }`}
                   >
-                    Your Seat ({coupleSeats.hostSeat.id})
+                    {hostRoleBadge} · {room.hostName || 'Host'} ({coupleSeats.hostSeat.id})
                   </button>
                   <button
                     type="button"
                     onClick={() => setViewerRoleOverride('guest')}
                     className={`px-2.5 py-1 rounded text-xs cursor-pointer ${
                       viewerSeatRole === 'guest'
-                        ? 'bg-[#F472B6] text-[#080810] font-semibold'
+                        ? coupleRoles.guestPartnerRole === 'bf'
+                          ? 'bg-[#8B5CF6] text-white font-semibold'
+                          : 'bg-[#F472B6] text-[#080810] font-semibold'
                         : 'bg-[#0B1020] text-slate-300 hover:text-white'
                     }`}
                   >
-                    {room.guestLabel || 'My GF'} ({coupleSeats.guestSeat.id})
+                    {guestRoleBadge} · {room.guestLabel || 'Partner'} ({coupleSeats.guestSeat.id})
                   </button>
                 </div>
                 <button
@@ -1946,7 +2271,7 @@ export function CinemaPlayerPage() {
                   className="px-3 py-1 rounded-lg bg-[#8B5CF6] text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
                 >
                   <Armchair className="w-3.5 h-3.5" />
-                  <span>Manage Seat Map ({coupleSeats.hostSeat.id}·{coupleSeats.guestSeat.id})</span>
+                  <span>Seats &amp; BF/GF ({coupleSeats.hostSeat.id}·{coupleSeats.guestSeat.id})</span>
                 </button>
               </div>
             )}
@@ -2100,23 +2425,72 @@ export function CinemaPlayerPage() {
         )}
 
         {openDrawer === 'chapters' && (
-          <div className="pointer-events-auto w-full max-w-2xl p-4 rounded-2xl bg-[#151126]/95 border border-[#C4B5FD]/25 space-y-2">
-            <p className="text-xs font-semibold text-white">Synchronized Chapters</p>
-            <div className="grid sm:grid-cols-2 gap-2">
-              {(movie?.chapters || []).map((ch) => (
+          <div
+            data-testid="chapters-scenes-drawer"
+            className="pointer-events-auto w-full max-w-2xl p-4 rounded-2xl bg-[#151126]/95 border border-[#C4B5FD]/25 space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-white">Synchronized Parts &amp; Scenes</p>
+                {activeChapter && (
+                  <p className="text-[11px] text-[#F472B6]">
+                    Synced for everyone: {activeChapter.title} ({formatTimestamp(displayTime)})
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px]">
                 <button
-                  key={ch.id}
                   type="button"
-                  onClick={() => {
-                    sendPlaybackCommand({ action: 'chapter', chapterId: ch.id, time: ch.timeSeconds });
-                    setOpenDrawer('none');
-                  }}
-                  className="p-2.5 rounded-lg bg-[#0B1020] hover:bg-[#8B5CF6]/30 text-left flex items-center justify-between text-xs cursor-pointer"
+                  data-testid="skip-back-30-btn"
+                  onClick={() => sendPlaybackCommand({ action: 'seek', time: Math.max(0, displayTime - 30) })}
+                  className="px-2.5 py-1 rounded-lg bg-[#0B1020] hover:bg-[#8B5CF6]/30 border border-white/10 text-slate-200 cursor-pointer"
                 >
-                  <span className="text-white">{ch.title}</span>
-                  <span className="font-mono-tabular text-[#C4B5FD]">{formatTimestamp(ch.timeSeconds)}</span>
+                  -30s
                 </button>
-              ))}
+                <button
+                  type="button"
+                  data-testid="skip-fwd-30-btn"
+                  onClick={() => sendPlaybackCommand({ action: 'seek', time: Math.min(duration, displayTime + 30) })}
+                  className="px-2.5 py-1 rounded-lg bg-[#0B1020] hover:bg-[#8B5CF6]/30 border border-white/10 text-slate-200 cursor-pointer"
+                >
+                  +30s
+                </button>
+                <button
+                  type="button"
+                  data-testid="skip-fwd-5m-btn"
+                  onClick={() => sendPlaybackCommand({ action: 'seek', time: Math.min(duration, displayTime + 300) })}
+                  className="px-2.5 py-1 rounded-lg bg-[#0B1020] hover:bg-[#8B5CF6]/30 border border-white/10 text-slate-200 cursor-pointer"
+                >
+                  +5m
+                </button>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {(movie?.chapters || []).map((ch) => {
+                const isActive = activeChapter?.id === ch.id;
+                return (
+                  <button
+                    key={ch.id}
+                    type="button"
+                    data-testid={`chapter-btn-${ch.id}`}
+                    onClick={() => {
+                      sendPlaybackCommand({ action: 'chapter', chapterId: ch.id, time: ch.timeSeconds });
+                      setOpenDrawer('none');
+                    }}
+                    className={`p-2.5 rounded-lg text-left flex items-center justify-between text-xs cursor-pointer border transition-colors ${
+                      isActive
+                        ? 'bg-[#8B5CF6]/30 border-[#C4B5FD] text-white'
+                        : 'bg-[#0B1020] border-white/5 hover:bg-[#8B5CF6]/20 text-slate-200'
+                    }`}
+                  >
+                    <span className="truncate pr-2">{ch.title}</span>
+                    <span className="font-mono-tabular text-[#C4B5FD] shrink-0">
+                      {isActive ? 'NOW · ' : ''}
+                      {formatTimestamp(ch.timeSeconds)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -2259,6 +2633,7 @@ export function CinemaPlayerPage() {
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <button
                   type="button"
+                  data-testid="dock-screen-mode-btn"
                   onClick={() => setOpenDrawer((d) => (d === 'screens' ? 'none' : 'screens'))}
                   className={`px-3 py-2 rounded-lg font-medium flex items-center gap-1.5 cursor-pointer ${
                     openDrawer === 'screens' ? 'bg-[#8B5CF6] text-white' : 'bg-[#1C1930] text-slate-200'
@@ -2379,6 +2754,8 @@ export function CinemaPlayerPage() {
         guestSeatId={coupleSeats.guestSeat.id}
         hostLabel={room.hostName || 'You'}
         guestLabel={room.guestLabel || 'My GF'}
+        hostPartnerRole={coupleRoles.hostPartnerRole}
+        guestPartnerRole={coupleRoles.guestPartnerRole}
         viewerSeatRole={viewerSeatRole}
         screenMode={screenMode}
         saving={savingSeats}

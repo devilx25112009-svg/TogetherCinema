@@ -1,8 +1,10 @@
+import { auth } from './firebase';
 import type {
   ChatMessageRecord,
   CinemaRoomRecord,
   MemoryItemRecord,
   MovieRecord,
+  PartnerGenderRole,
   PartnerProfile,
   PlaybackState,
   RoomParticipant,
@@ -11,13 +13,21 @@ import type {
   WatchlistItemRecord,
 } from '../types/cinema';
 
-function buildHeaders(user?: PartnerProfile | null): HeadersInit {
+async function buildHeaders(user?: PartnerProfile | null): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
   if (user) {
     headers['X-User-Id'] = user.uid;
     headers['X-User-Name'] = user.displayName;
+  }
+  try {
+    if (auth.currentUser) {
+      const token = await auth.currentUser.getIdToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    // fallback without Firebase ID token in demo mode
   }
   return headers;
 }
@@ -61,22 +71,22 @@ export const cinemaApi = {
     ),
   getMovie: (id: string) =>
     fetch(`/api/movies/${encodeURIComponent(id)}`).then((r) => handleJson<{ movie: MovieRecord }>(r)),
-  createMovie: (payload: Partial<MovieRecord>, user?: PartnerProfile | null) =>
+  createMovie: async (payload: Partial<MovieRecord>, user?: PartnerProfile | null) =>
     fetch('/api/movies', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ movie: MovieRecord }>(r)),
-  updateMovie: (id: string, patch: Partial<MovieRecord>, user?: PartnerProfile | null) =>
+  updateMovie: async (id: string, patch: Partial<MovieRecord>, user?: PartnerProfile | null) =>
     fetch(`/api/movies/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(patch),
     }).then((r) => handleJson<{ movie: MovieRecord }>(r)),
-  deleteMovie: (id: string, user?: PartnerProfile | null) =>
+  deleteMovie: async (id: string, user?: PartnerProfile | null) =>
     fetch(`/api/movies/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
     }).then((r) => handleJson<{ ok: boolean }>(r)),
   resolveYouTubeMetadata: (url: string) =>
     fetch(`/api/youtube/metadata?url=${encodeURIComponent(url)}`).then((r) =>
@@ -94,17 +104,17 @@ export const cinemaApi = {
     ),
 
   // Large Resumable Uploads
-  listUploadSessions: (user?: PartnerProfile | null) =>
-    fetch('/api/uploads/sessions', { headers: buildHeaders(user) }).then((r) =>
+  listUploadSessions: async (user?: PartnerProfile | null) =>
+    fetch('/api/uploads/sessions', { headers: await buildHeaders(user) }).then((r) =>
       handleJson<{ sessions: UploadSessionRecord[] }>(r)
     ),
-  createUploadSession: (
+  createUploadSession: async (
     payload: { fileName: string; fileSizeBytes: number; mimeType: string },
     user?: PartnerProfile | null
   ) =>
     fetch('/api/uploads/sessions', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ session: UploadSessionRecord }>(r)),
   getUploadSession: (sessionId: string) =>
@@ -131,14 +141,14 @@ export const cinemaApi = {
     fetch(`/api/uploads/sessions/${encodeURIComponent(sessionId)}/resume`, { method: 'POST' }).then((r) =>
       handleJson<{ session: UploadSessionRecord }>(r)
     ),
-  completeUploadSession: (
+  completeUploadSession: async (
     sessionId: string,
     metadata: { title?: string; description?: string; genre?: string; collectionName?: string },
     user?: PartnerProfile | null
   ) =>
     fetch(`/api/uploads/sessions/${encodeURIComponent(sessionId)}/complete`, {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(metadata),
     }).then((r) => handleJson<{ session: UploadSessionRecord; movie: MovieRecord }>(r)),
   abortUploadSession: (sessionId: string) =>
@@ -155,30 +165,35 @@ export const cinemaApi = {
         playbackStates: Record<string, PlaybackState>;
       }>(r)
     ),
-  createRoom: (payload: Partial<CinemaRoomRecord>, user?: PartnerProfile | null) =>
+  createRoom: async (payload: Partial<CinemaRoomRecord>, user?: PartnerProfile | null) =>
     fetch('/api/rooms', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ room: CinemaRoomRecord }>(r)),
-  joinRoom: (inviteCode: string, user?: PartnerProfile | null) =>
+  joinRoom: async (inviteCode: string, user?: PartnerProfile | null) =>
     fetch('/api/rooms/join', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify({ inviteCode }),
     }).then((r) => handleJson<{ room: CinemaRoomRecord }>(r)),
-  getRoom: (roomId: string) =>
-    fetch(`/api/rooms/${encodeURIComponent(roomId)}`).then((r) =>
+  getRoom: async (roomId: string, user?: PartnerProfile | null) =>
+    fetch(`/api/rooms/${encodeURIComponent(roomId)}`, {
+      headers: await buildHeaders(user),
+    }).then((r) =>
       handleJson<{
         room: CinemaRoomRecord;
         movie: MovieRecord | null;
         playbackState: PlaybackState;
         participants: RoomParticipant[];
         chatHistory: ChatMessageRecord[];
+        serverTime?: number;
       }>(r)
     ),
-  syncRoom: (roomId: string, since = 0) =>
-    fetch(`/api/rooms/${encodeURIComponent(roomId)}/sync?since=${encodeURIComponent(String(since))}`).then((r) =>
+  syncRoom: async (roomId: string, since = 0, user?: PartnerProfile | null) =>
+    fetch(`/api/rooms/${encodeURIComponent(roomId)}/sync?since=${encodeURIComponent(String(since))}`, {
+      headers: await buildHeaders(user),
+    }).then((r) =>
       handleJson<{
         room: CinemaRoomRecord;
         movie: MovieRecord | null;
@@ -197,20 +212,22 @@ export const cinemaApi = {
         serverTime: number;
       }>(r)
     ),
-  postRoomEvent: (roomId: string, payload: Record<string, unknown>, user?: PartnerProfile | null) =>
+  postRoomEvent: async (roomId: string, payload: Record<string, unknown>, user?: PartnerProfile | null) =>
     fetch(`/api/rooms/${encodeURIComponent(roomId)}/events`, {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
-    }).then((r) => handleJson<{ ok: boolean; playbackState?: PlaybackState; message?: ChatMessageRecord }>(r)),
-  setRoomSource: (
+    }).then((r) =>
+      handleJson<{ ok: boolean; playbackState?: PlaybackState; message?: ChatMessageRecord; room?: CinemaRoomRecord }>(r)
+    ),
+  setRoomSource: async (
     roomId: string,
     payload: { movieId?: string; youtubeUrl?: string; title?: string; thumbnailUrl?: string },
     user?: PartnerProfile | null
   ) =>
     fetch(`/api/rooms/${encodeURIComponent(roomId)}/source`, {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) =>
       handleJson<{
@@ -219,14 +236,21 @@ export const cinemaApi = {
         playbackState: PlaybackState;
       }>(r)
     ),
-  updateRoomSeats: (
+  updateRoomSeats: async (
     roomId: string,
-    payload: { hostSeatId?: string; guestSeatId?: string; guestLabel?: string },
+    payload: {
+      hostSeatId?: string;
+      guestSeatId?: string;
+      hostName?: string;
+      guestLabel?: string;
+      hostPartnerRole?: PartnerGenderRole;
+      guestPartnerRole?: PartnerGenderRole;
+    },
     user?: PartnerProfile | null
   ) =>
     fetch(`/api/rooms/${encodeURIComponent(roomId)}/seats`, {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) =>
       handleJson<{
@@ -236,35 +260,35 @@ export const cinemaApi = {
     ),
 
   // Partner Connection
-  createPartnerInvite: (user?: PartnerProfile | null) =>
+  createPartnerInvite: async (user?: PartnerProfile | null) =>
     fetch('/api/partners/invite', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
     }).then((r) => handleJson<{ invitation: { code: string } }>(r)),
-  acceptPartnerInvite: (code: string, user?: PartnerProfile | null) =>
+  acceptPartnerInvite: async (code: string, user?: PartnerProfile | null) =>
     fetch('/api/partners/accept', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify({ code }),
     }).then((r) => handleJson<{ connection: { partnerId: string; partnerName: string } }>(r)),
-  disconnectPartner: (user?: PartnerProfile | null) =>
+  disconnectPartner: async (user?: PartnerProfile | null) =>
     fetch('/api/partners/disconnect', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
     }).then((r) => handleJson<{ ok: boolean }>(r)),
 
   // Watchlist
   listWatchlist: () => fetch('/api/watchlist').then((r) => handleJson<{ items: WatchlistItemRecord[] }>(r)),
-  addWatchlistItem: (payload: Partial<WatchlistItemRecord>, user?: PartnerProfile | null) =>
+  addWatchlistItem: async (payload: Partial<WatchlistItemRecord>, user?: PartnerProfile | null) =>
     fetch('/api/watchlist', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ item: WatchlistItemRecord }>(r)),
-  updateWatchlistItem: (id: string, patch: Record<string, unknown>, user?: PartnerProfile | null) =>
+  updateWatchlistItem: async (id: string, patch: Record<string, unknown>, user?: PartnerProfile | null) =>
     fetch(`/api/watchlist/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(patch),
     }).then((r) => handleJson<{ item: WatchlistItemRecord }>(r)),
   deleteWatchlistItem: (id: string) =>
@@ -274,10 +298,10 @@ export const cinemaApi = {
 
   // Memories
   listMemories: () => fetch('/api/memories').then((r) => handleJson<{ memories: MemoryItemRecord[] }>(r)),
-  addMemory: (payload: Partial<MemoryItemRecord>, user?: PartnerProfile | null) =>
+  addMemory: async (payload: Partial<MemoryItemRecord>, user?: PartnerProfile | null) =>
     fetch('/api/memories', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ memory: MemoryItemRecord }>(r)),
   deleteMemory: (id: string) =>
@@ -287,16 +311,16 @@ export const cinemaApi = {
 
   // Snacks
   listSnacks: () => fetch('/api/snacks').then((r) => handleJson<{ snacks: SnackItemRecord[] }>(r)),
-  createSnack: (payload: Partial<SnackItemRecord>, user?: PartnerProfile | null) =>
+  createSnack: async (payload: Partial<SnackItemRecord>, user?: PartnerProfile | null) =>
     fetch('/api/snacks', {
       method: 'POST',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(payload),
     }).then((r) => handleJson<{ snack: SnackItemRecord }>(r)),
-  updateSnack: (id: string, patch: Partial<SnackItemRecord>, user?: PartnerProfile | null) =>
+  updateSnack: async (id: string, patch: Partial<SnackItemRecord>, user?: PartnerProfile | null) =>
     fetch(`/api/snacks/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: buildHeaders(user),
+      headers: await buildHeaders(user),
       body: JSON.stringify(patch),
     }).then((r) => handleJson<{ snack: SnackItemRecord }>(r)),
 

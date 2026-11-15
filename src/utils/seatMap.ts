@@ -166,12 +166,70 @@ export function areSeatsAdjacent(seatAId?: string | null, seatBId?: string | nul
   return a.row === b.row && a.section === b.section && Math.abs(a.column - b.column) === 1;
 }
 
+import type { PartnerGenderRole } from '../types/cinema';
+
 export type ViewerSeatRole = 'host' | 'guest';
 
 export interface SeatPovCameraPose {
   eyePos: [number, number, number];
   lookAt: [number, number, number];
   fov: number;
+}
+
+export function resolveCoupleRoles(
+  hostPartnerRole?: PartnerGenderRole | null,
+  guestPartnerRole?: PartnerGenderRole | null
+): {
+  hostPartnerRole: PartnerGenderRole;
+  guestPartnerRole: PartnerGenderRole;
+} {
+  if (hostPartnerRole === 'bf' || hostPartnerRole === 'gf') {
+    const opposite: PartnerGenderRole = hostPartnerRole === 'bf' ? 'gf' : 'bf';
+    return {
+      hostPartnerRole,
+      guestPartnerRole: guestPartnerRole === opposite ? guestPartnerRole : opposite,
+    };
+  }
+  if (guestPartnerRole === 'bf' || guestPartnerRole === 'gf') {
+    const opposite: PartnerGenderRole = guestPartnerRole === 'bf' ? 'gf' : 'bf';
+    return {
+      hostPartnerRole: opposite,
+      guestPartnerRole,
+    };
+  }
+  return { hostPartnerRole: 'bf', guestPartnerRole: 'gf' };
+}
+
+export function setPartnerRoleForSide(
+  side: ViewerSeatRole,
+  role: PartnerGenderRole
+): {
+  hostPartnerRole: PartnerGenderRole;
+  guestPartnerRole: PartnerGenderRole;
+} {
+  const clean: PartnerGenderRole = role === 'bf' ? 'bf' : 'gf';
+  const other: PartnerGenderRole = clean === 'bf' ? 'gf' : 'bf';
+  return side === 'host'
+    ? { hostPartnerRole: clean, guestPartnerRole: other }
+    : { hostPartnerRole: other, guestPartnerRole: clean };
+}
+
+export function swapCoupleRoles(
+  hostPartnerRole?: PartnerGenderRole | null,
+  guestPartnerRole?: PartnerGenderRole | null
+): {
+  hostPartnerRole: PartnerGenderRole;
+  guestPartnerRole: PartnerGenderRole;
+} {
+  const current = resolveCoupleRoles(hostPartnerRole, guestPartnerRole);
+  return {
+    hostPartnerRole: current.guestPartnerRole,
+    guestPartnerRole: current.hostPartnerRole,
+  };
+}
+
+export function formatPartnerRoleBadge(role?: PartnerGenderRole | null): 'BF' | 'GF' {
+  return role === 'bf' ? 'BF' : 'GF';
 }
 
 /**
@@ -182,9 +240,14 @@ export function resolveDefaultViewerRole(params: {
   userId?: string | null;
   roomHostId?: string | null;
   seatParam?: string | null;
+  hostPartnerRole?: PartnerGenderRole | null;
+  guestPartnerRole?: PartnerGenderRole | null;
 }): ViewerSeatRole {
   const param = params.seatParam?.trim().toLowerCase();
-  if (param === 'gf' || param === 'guest') return 'guest';
+  const roles = resolveCoupleRoles(params.hostPartnerRole, params.guestPartnerRole);
+  if (param === 'gf') return roles.guestPartnerRole === 'gf' ? 'guest' : 'host';
+  if (param === 'bf') return roles.hostPartnerRole === 'bf' ? 'host' : 'guest';
+  if (param === 'guest' || param === 'partner') return 'guest';
   if (param === 'me' || param === 'host') return 'host';
   if (params.userId && params.roomHostId && params.userId !== params.roomHostId) {
     return 'guest';

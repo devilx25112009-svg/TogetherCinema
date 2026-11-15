@@ -9,10 +9,14 @@ import {
   DEFAULT_GUEST_SEAT_ID,
   DEFAULT_HOST_SEAT_ID,
   findAdjacentPartnerSeat,
+  formatPartnerRoleBadge,
   formatSeatLabel,
   getSeatById,
+  resolveCoupleRoles,
   resolveCoupleSeats,
   resolveDefaultViewerRole,
+  setPartnerRoleForSide,
+  swapCoupleRoles,
 } from './seatMap';
 
 test('auditorium contains 6 tiered rows x 12 seats = 72 seats with strictly increasing Z and Y', () => {
@@ -42,12 +46,10 @@ test('move me places host on target seat cleanly and swaps when picking GF seat'
 });
 
 test('sit together keeps both seats adjacent inside the same row and wing without crossing aisles', () => {
-  // Rightmost seat of left wing (col 3) pairs with col 2 (not col 4 across the aisle)
   const leftWing = assignCoupleSeats('D6', 'D7', 'C3', 'together');
   assert.deepEqual(leftWing, { hostSeatId: 'C2', guestSeatId: 'C3' });
   assert.equal(areSeatsAdjacent(leftWing.hostSeatId, leftWing.guestSeatId), true);
 
-  // Center sweet-spot
   const center = assignCoupleSeats('D6', 'D7', 'B5', 'together');
   assert.deepEqual(center, { hostSeatId: 'B5', guestSeatId: 'B6' });
   assert.equal(areSeatsAdjacent(center.hostSeatId, center.guestSeatId), true);
@@ -65,7 +67,7 @@ test('resolveCoupleSeats falls back to defaults and prevents duplicate seat coll
   assert.match(formatSeatLabel('D7'), /Row D · Seat 7 \(Center\)/);
 });
 
-test('resolveDefaultViewerRole locks host to host seat and guest/GF to guest seat', () => {
+test('resolveDefaultViewerRole locks host to host seat and guest/GF to guest seat, respecting BF/GF assignments', () => {
   assert.equal(resolveDefaultViewerRole({ userId: 'demo-partner-a', roomHostId: 'demo-partner-a' }), 'host');
   assert.equal(resolveDefaultViewerRole({ userId: 'demo-partner-b', roomHostId: 'demo-partner-a' }), 'guest');
   assert.equal(
@@ -76,6 +78,35 @@ test('resolveDefaultViewerRole locks host to host seat and guest/GF to guest sea
     resolveDefaultViewerRole({ userId: 'demo-partner-b', roomHostId: 'demo-partner-a', seatParam: 'host' }),
     'host'
   );
+  assert.equal(
+    resolveDefaultViewerRole({
+      userId: 'demo-partner-a',
+      roomHostId: 'demo-partner-a',
+      seatParam: 'bf',
+      hostPartnerRole: 'gf',
+      guestPartnerRole: 'bf',
+    }),
+    'guest'
+  );
+  assert.equal(
+    resolveDefaultViewerRole({
+      userId: 'demo-partner-b',
+      roomHostId: 'demo-partner-a',
+      seatParam: 'gf',
+      hostPartnerRole: 'gf',
+      guestPartnerRole: 'bf',
+    }),
+    'host'
+  );
+});
+
+test('BF/GF role helpers resolve, set per side, and swap cleanly without duplicate roles', () => {
+  assert.deepEqual(resolveCoupleRoles(), { hostPartnerRole: 'bf', guestPartnerRole: 'gf' });
+  assert.deepEqual(setPartnerRoleForSide('host', 'gf'), { hostPartnerRole: 'gf', guestPartnerRole: 'bf' });
+  assert.deepEqual(setPartnerRoleForSide('guest', 'bf'), { hostPartnerRole: 'gf', guestPartnerRole: 'bf' });
+  assert.deepEqual(swapCoupleRoles('gf', 'bf'), { hostPartnerRole: 'bf', guestPartnerRole: 'gf' });
+  assert.equal(formatPartnerRoleBadge('bf'), 'BF');
+  assert.equal(formatPartnerRoleBadge('gf'), 'GF');
 });
 
 test('computeSeatPovCamera anchors eye position strictly inside the assigned seat and clears rows in front', () => {
@@ -92,7 +123,6 @@ test('computeSeatPovCamera anchors eye position strictly inside the assigned sea
   assert.ok(poseF10.eyePos[1] > poseB2.eyePos[1]);
   assert.ok(poseF10.eyePos[2] > poseB2.eyePos[2]);
 
-  // Every tiered row B..F has unobstructed sightline above the preceding row's headrest to screen bottom (y=0.35)
   for (let i = 1; i < AUDITORIUM_ROWS.length; i++) {
     const frontRow = AUDITORIUM_ROWS[i - 1];
     const viewerSeat = getSeatById(`${AUDITORIUM_ROWS[i].row}6`)!;

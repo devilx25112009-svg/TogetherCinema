@@ -1,14 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Armchair, ArrowLeftRight, Heart, Sparkles, User, Users, X } from 'lucide-react';
-import type { ScreenMode } from '../../types/cinema';
+import type { PartnerGenderRole, ScreenMode } from '../../types/cinema';
 import {
   assignCoupleSeats,
   areSeatsAdjacent,
   AUDITORIUM_ROWS,
   AUDITORIUM_SEATS,
   findAdjacentPartnerSeat,
+  formatPartnerRoleBadge,
   formatSeatLabel,
+  resolveCoupleRoles,
   resolveCoupleSeats,
+  setPartnerRoleForSide,
+  swapCoupleRoles,
   type SeatAssignMode,
   type ViewerSeatRole,
 } from '../../utils/seatMap';
@@ -18,10 +22,19 @@ export interface AuditoriumSeatMapProps {
   guestSeatId?: string;
   hostLabel?: string;
   guestLabel?: string;
+  hostPartnerRole?: PartnerGenderRole;
+  guestPartnerRole?: PartnerGenderRole;
   viewerSeatRole?: ViewerSeatRole;
   screenMode?: ScreenMode;
   saving?: boolean;
-  onChangeSeats: (next: { hostSeatId: string; guestSeatId: string; guestLabel?: string }) => void;
+  onChangeSeats: (next: {
+    hostSeatId: string;
+    guestSeatId: string;
+    hostName?: string;
+    guestLabel?: string;
+    hostPartnerRole?: PartnerGenderRole;
+    guestPartnerRole?: PartnerGenderRole;
+  }) => void;
   onChangeViewerRole?: (role: ViewerSeatRole) => void;
   onClose?: () => void;
   compact?: boolean;
@@ -31,7 +44,9 @@ export function AuditoriumSeatMap({
   hostSeatId,
   guestSeatId,
   hostLabel = 'You',
-  guestLabel = 'My GF',
+  guestLabel = 'Partner',
+  hostPartnerRole,
+  guestPartnerRole,
   viewerSeatRole,
   screenMode = 'Screen X',
   saving = false,
@@ -40,45 +55,80 @@ export function AuditoriumSeatMap({
   compact = false,
 }: AuditoriumSeatMapProps) {
   const [assignMode, setAssignMode] = useState<SeatAssignMode>('guest');
+  const [editingHostLabel, setEditingHostLabel] = useState(hostLabel);
   const [editingLabel, setEditingLabel] = useState(guestLabel);
+
+  useEffect(() => {
+    setEditingHostLabel(hostLabel);
+  }, [hostLabel]);
+
+  useEffect(() => {
+    setEditingLabel(guestLabel);
+  }, [guestLabel]);
 
   const resolved = resolveCoupleSeats(hostSeatId, guestSeatId);
   const currentHostId = resolved.hostSeat.id;
   const currentGuestId = resolved.guestSeat.id;
   const together = areSeatsAdjacent(currentHostId, currentGuestId);
 
-  const handleSeatClick = (seatId: string) => {
-    const next = assignCoupleSeats(currentHostId, currentGuestId, seatId, assignMode);
+  const roles = resolveCoupleRoles(hostPartnerRole, guestPartnerRole);
+  const hostBadge = formatPartnerRoleBadge(roles.hostPartnerRole);
+  const guestBadge = formatPartnerRoleBadge(roles.guestPartnerRole);
+  const hostIsBf = roles.hostPartnerRole === 'bf';
+  const guestIsBf = roles.guestPartnerRole === 'bf';
+
+  const commitChange = (override: Partial<Parameters<AuditoriumSeatMapProps['onChangeSeats']>[0]>) => {
     onChangeSeats({
-      hostSeatId: next.hostSeatId,
-      guestSeatId: next.guestSeatId,
-      guestLabel: editingLabel.trim() || guestLabel,
+      hostSeatId: override.hostSeatId ?? currentHostId,
+      guestSeatId: override.guestSeatId ?? currentGuestId,
+      hostName: override.hostName ?? (editingHostLabel.trim() || hostLabel),
+      guestLabel: override.guestLabel ?? (editingLabel.trim() || guestLabel),
+      hostPartnerRole: override.hostPartnerRole ?? roles.hostPartnerRole,
+      guestPartnerRole: override.guestPartnerRole ?? roles.guestPartnerRole,
     });
   };
 
-  const handleBringGfBesideMe = () => {
+  const handleSeatClick = (seatId: string) => {
+    const next = assignCoupleSeats(currentHostId, currentGuestId, seatId, assignMode);
+    commitChange({
+      hostSeatId: next.hostSeatId,
+      guestSeatId: next.guestSeatId,
+    });
+  };
+
+  const handleBringPartnerBesideHost = () => {
     const partnerSeat = findAdjacentPartnerSeat(currentHostId);
-    onChangeSeats({
+    commitChange({
       hostSeatId: currentHostId,
       guestSeatId: partnerSeat.id,
-      guestLabel: editingLabel.trim() || guestLabel,
     });
   };
 
   const handleSwapSeats = () => {
-    onChangeSeats({
+    commitChange({
       hostSeatId: currentGuestId,
       guestSeatId: currentHostId,
-      guestLabel: editingLabel.trim() || guestLabel,
+    });
+  };
+
+  const handleSwapBfGf = () => {
+    const swapped = swapCoupleRoles(roles.hostPartnerRole, roles.guestPartnerRole);
+    commitChange({
+      hostPartnerRole: swapped.hostPartnerRole,
+      guestPartnerRole: swapped.guestPartnerRole,
+    });
+  };
+
+  const handleSetSideRole = (side: 'host' | 'guest', role: PartnerGenderRole) => {
+    const updated = setPartnerRoleForSide(side, role);
+    commitChange({
+      hostPartnerRole: updated.hostPartnerRole,
+      guestPartnerRole: updated.guestPartnerRole,
     });
   };
 
   const applyPreset = (h: string, g: string) => {
-    onChangeSeats({
-      hostSeatId: h,
-      guestSeatId: g,
-      guestLabel: editingLabel.trim() || guestLabel,
-    });
+    commitChange({ hostSeatId: h, guestSeatId: g });
   };
 
   const seatColumnsLeft = [1, 2, 3];
@@ -91,6 +141,7 @@ export function AuditoriumSeatMap({
     const isHost = seat.id === currentHostId;
     const isGuest = seat.id === currentGuestId;
     const isCenter = seat.section === 'center';
+    const seatRoleIsBf = isHost ? hostIsBf : guestIsBf;
 
     let seatClasses =
       'bg-[#18132b] border-white/10 text-slate-300 hover:border-[#C4B5FD]/60 hover:bg-[#241b42]';
@@ -98,15 +149,17 @@ export function AuditoriumSeatMap({
       seatClasses =
         'bg-[#221840] border-[#8B5CF6]/25 text-slate-200 hover:border-[#C4B5FD]/80 hover:bg-[#2d2055]';
     }
-    if (isHost) {
-      seatClasses =
-        'bg-[#8B5CF6] border-[#C4B5FD] text-white shadow-[0_0_16px_rgba(139,92,246,0.65)] scale-[1.04]';
-    } else if (isGuest) {
-      seatClasses =
-        'bg-[#F472B6] border-rose-200 text-[#080810] font-bold shadow-[0_0_16px_rgba(244,114,182,0.65)] scale-[1.04]';
+    if (isHost || isGuest) {
+      seatClasses = seatRoleIsBf
+        ? 'bg-[#8B5CF6] border-[#C4B5FD] text-white font-bold shadow-[0_0_16px_rgba(139,92,246,0.65)] scale-[1.04]'
+        : 'bg-[#F472B6] border-rose-200 text-[#080810] font-bold shadow-[0_0_16px_rgba(244,114,182,0.65)] scale-[1.04]';
     }
 
-    const whoHere = isHost ? ` (${hostLabel})` : isGuest ? ` (${editingLabel || guestLabel})` : '';
+    const whoHere = isHost
+      ? ` (${hostBadge} · ${editingHostLabel || hostLabel})`
+      : isGuest
+      ? ` (${guestBadge} · ${editingLabel || guestLabel})`
+      : '';
 
     return (
       <button
@@ -114,6 +167,7 @@ export function AuditoriumSeatMap({
         type="button"
         data-testid={`seat-btn-${seat.id}`}
         data-seat-owner={isHost ? 'host' : isGuest ? 'guest' : 'open'}
+        data-seat-partner-role={isHost ? roles.hostPartnerRole : isGuest ? roles.guestPartnerRole : 'none'}
         onClick={() => handleSeatClick(seat.id)}
         aria-label={`Seat ${seat.id}, ${formatSeatLabel(seat.id)}${whoHere}`}
         title={`${seat.id} · ${formatSeatLabel(seat.id)}${whoHere}`}
@@ -122,11 +176,15 @@ export function AuditoriumSeatMap({
         } ${seatClasses}`}
       >
         <span className="leading-none font-mono font-semibold">
-          {isHost ? 'YOU' : isGuest ? 'GF' : seat.id}
+          {isHost ? hostBadge : isGuest ? guestBadge : seat.id}
         </span>
         <span
           className={`mt-0.5 h-[3px] w-3/4 rounded-full ${
-            isHost ? 'bg-white/75' : isGuest ? 'bg-[#080810]/55' : 'bg-white/15'
+            isHost || isGuest
+              ? seatRoleIsBf
+                ? 'bg-white/75'
+                : 'bg-[#080810]/55'
+              : 'bg-white/15'
           }`}
         />
       </button>
@@ -135,6 +193,75 @@ export function AuditoriumSeatMap({
 
   return (
     <div className="space-y-4">
+      {/* Couple Roles Assignment Bar (Adjust Who is BF and Who is GF) */}
+      <div className="rounded-xl bg-[#0B1020] border border-[#C4B5FD]/20 p-3 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[11px] font-semibold text-slate-300">
+            Host Seat ({currentHostId}):
+          </span>
+          <div className="inline-flex rounded-lg bg-[#151126] p-0.5 border border-white/10">
+            <button
+              type="button"
+              data-testid="host-role-bf"
+              onClick={() => handleSetSideRole('host', 'bf')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                hostIsBf ? 'bg-[#8B5CF6] text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              BF
+            </button>
+            <button
+              type="button"
+              data-testid="host-role-gf"
+              onClick={() => handleSetSideRole('host', 'gf')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                !hostIsBf ? 'bg-[#F472B6] text-[#080810]' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              GF
+            </button>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="swap-bf-gf-btn"
+          onClick={handleSwapBfGf}
+          className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#8B5CF6]/30 to-[#F472B6]/30 border border-[#C4B5FD]/35 hover:border-white text-[11px] font-semibold text-white flex items-center gap-1.5 cursor-pointer"
+        >
+          <ArrowLeftRight className="w-3.5 h-3.5 text-[#F472B6]" />
+          <span>Swap BF ↔ GF</span>
+        </button>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[11px] font-semibold text-slate-300">
+            Partner Seat ({currentGuestId}):
+          </span>
+          <div className="inline-flex rounded-lg bg-[#151126] p-0.5 border border-white/10">
+            <button
+              type="button"
+              data-testid="guest-role-bf"
+              onClick={() => handleSetSideRole('guest', 'bf')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                guestIsBf ? 'bg-[#8B5CF6] text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              BF
+            </button>
+            <button
+              type="button"
+              data-testid="guest-role-gf"
+              onClick={() => handleSetSideRole('guest', 'gf')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                !guestIsBf ? 'bg-[#F472B6] text-[#080810]' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              GF
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Placement Target Selector */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-[#0B1020] border border-white/10">
@@ -144,12 +271,14 @@ export function AuditoriumSeatMap({
             onClick={() => setAssignMode('guest')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
               assignMode === 'guest'
-                ? 'bg-[#F472B6] text-[#080810]'
+                ? guestIsBf
+                  ? 'bg-[#8B5CF6] text-white'
+                  : 'bg-[#F472B6] text-[#080810]'
                 : 'text-slate-300 hover:text-white'
             }`}
           >
             <Heart className="w-3.5 h-3.5" />
-            <span>Move My GF</span>
+            <span>Move {guestBadge} ({currentGuestId})</span>
           </button>
           <button
             type="button"
@@ -157,12 +286,14 @@ export function AuditoriumSeatMap({
             onClick={() => setAssignMode('host')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
               assignMode === 'host'
-                ? 'bg-[#8B5CF6] text-white'
+                ? hostIsBf
+                  ? 'bg-[#8B5CF6] text-white'
+                  : 'bg-[#F472B6] text-[#080810]'
                 : 'text-slate-300 hover:text-white'
             }`}
           >
             <User className="w-3.5 h-3.5" />
-            <span>Move Me</span>
+            <span>Move {hostBadge} ({currentHostId})</span>
           </button>
           <button
             type="button"
@@ -182,11 +313,11 @@ export function AuditoriumSeatMap({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={handleBringGfBesideMe}
+            onClick={handleBringPartnerBesideHost}
             className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] border border-[#F472B6]/35 hover:border-[#F472B6] text-[11px] font-medium text-[#F472B6] flex items-center gap-1 cursor-pointer"
           >
             <Sparkles className="w-3 h-3" />
-            <span>Bring GF Next to Me</span>
+            <span>Bring {guestBadge} Next to {hostBadge}</span>
           </button>
           <button
             type="button"
@@ -194,7 +325,7 @@ export function AuditoriumSeatMap({
             className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] border border-white/10 hover:border-[#C4B5FD]/50 text-[11px] font-medium text-slate-200 flex items-center gap-1 cursor-pointer"
           >
             <ArrowLeftRight className="w-3 h-3" />
-            <span>Swap</span>
+            <span>Swap Seats</span>
           </button>
         </div>
       </div>
@@ -226,27 +357,22 @@ export function AuditoriumSeatMap({
                 {rowSpec.row}
               </span>
 
-              {/* Left Wing (1-3) */}
               <div className="flex items-center gap-1">
                 {seatColumnsLeft.map((col) => renderSeatButton(rowSpec.row, col))}
               </div>
 
-              {/* Left Aisle */}
               <div className="w-3 sm:w-5 flex justify-center">
                 <span className="w-1 h-4 rounded-full bg-amber-400/25" />
               </div>
 
-              {/* VIP Center (4-9) */}
               <div className="flex items-center gap-1">
                 {seatColumnsCenter.map((col) => renderSeatButton(rowSpec.row, col))}
               </div>
 
-              {/* Right Aisle */}
               <div className="w-3 sm:w-5 flex justify-center">
                 <span className="w-1 h-4 rounded-full bg-amber-400/25" />
               </div>
 
-              {/* Right Wing (10-12) */}
               <div className="flex items-center gap-1">
                 {seatColumnsRight.map((col) => renderSeatButton(rowSpec.row, col))}
               </div>
@@ -259,12 +385,16 @@ export function AuditoriumSeatMap({
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 text-[11px] text-slate-400">
           <div className="flex flex-wrap items-center gap-3">
             <span className="inline-flex items-center gap-1.5 text-slate-200">
-              <span className="w-3 h-3 rounded bg-[#8B5CF6] inline-block" />
-              <span>{hostLabel} ({currentHostId})</span>
+              <span className={`w-3 h-3 rounded inline-block ${hostIsBf ? 'bg-[#8B5CF6]' : 'bg-[#F472B6]'}`} />
+              <span>
+                {hostBadge} · {editingHostLabel || hostLabel} ({currentHostId})
+              </span>
             </span>
             <span className="inline-flex items-center gap-1.5 text-slate-200">
-              <span className="w-3 h-3 rounded bg-[#F472B6] inline-block" />
-              <span>{editingLabel || guestLabel} ({currentGuestId})</span>
+              <span className={`w-3 h-3 rounded inline-block ${guestIsBf ? 'bg-[#8B5CF6]' : 'bg-[#F472B6]'}`} />
+              <span>
+                {guestBadge} · {editingLabel || guestLabel} ({currentGuestId})
+              </span>
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-3 h-3 rounded bg-[#221840] border border-[#8B5CF6]/40 inline-block" />
@@ -278,12 +408,33 @@ export function AuditoriumSeatMap({
         </div>
       </div>
 
-      {/* GF Name Label + Quick Row Presets */}
-      <div className="grid sm:grid-cols-2 gap-3 items-center">
+      {/* Host & Partner Name Labels + Quick Row Presets */}
+      <div className="grid sm:grid-cols-2 gap-2.5 items-center">
         <div className="flex items-center gap-2 rounded-xl bg-[#0B1020] border border-white/10 px-3 py-2">
-          <Heart className="w-3.5 h-3.5 text-[#F472B6] shrink-0" />
+          <User className={`w-3.5 h-3.5 shrink-0 ${hostIsBf ? 'text-[#8B5CF6]' : 'text-[#F472B6]'}`} />
+          <label htmlFor="host-seat-label-input" className="text-[11px] text-slate-400 shrink-0">
+            {hostBadge} Name:
+          </label>
+          <input
+            id="host-seat-label-input"
+            type="text"
+            value={editingHostLabel}
+            maxLength={32}
+            onChange={(e) => setEditingHostLabel(e.target.value)}
+            onBlur={() => {
+              if (editingHostLabel.trim() && editingHostLabel.trim() !== hostLabel) {
+                commitChange({ hostName: editingHostLabel.trim() });
+              }
+            }}
+            placeholder={hostBadge}
+            className="flex-1 min-w-0 bg-transparent text-xs font-semibold text-white focus:outline-none"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl bg-[#0B1020] border border-white/10 px-3 py-2">
+          <Heart className={`w-3.5 h-3.5 shrink-0 ${guestIsBf ? 'text-[#8B5CF6]' : 'text-[#F472B6]'}`} />
           <label htmlFor="gf-seat-label-input" className="text-[11px] text-slate-400 shrink-0">
-            GF Name:
+            {guestBadge} Name:
           </label>
           <input
             id="gf-seat-label-input"
@@ -293,41 +444,37 @@ export function AuditoriumSeatMap({
             onChange={(e) => setEditingLabel(e.target.value)}
             onBlur={() => {
               if (editingLabel.trim() && editingLabel.trim() !== guestLabel) {
-                onChangeSeats({
-                  hostSeatId: currentHostId,
-                  guestSeatId: currentGuestId,
-                  guestLabel: editingLabel.trim(),
-                });
+                commitChange({ guestLabel: editingLabel.trim() });
               }
             }}
-            placeholder="My GF"
+            placeholder={guestBadge}
             className="flex-1 min-w-0 bg-transparent text-xs font-semibold text-white focus:outline-none"
           />
         </div>
+      </div>
 
-        <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-1.5 text-[11px]">
-          <button
-            type="button"
-            onClick={() => applyPreset('A6', 'A7')}
-            className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
-          >
-            Front (A6·A7)
-          </button>
-          <button
-            type="button"
-            onClick={() => applyPreset('D6', 'D7')}
-            className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
-          >
-            VIP Center (D6·D7)
-          </button>
-          <button
-            type="button"
-            onClick={() => applyPreset('F6', 'F7')}
-            className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
-          >
-            Balcony (F6·F7)
-          </button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px]">
+        <button
+          type="button"
+          onClick={() => applyPreset('A6', 'A7')}
+          className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
+        >
+          Front (A6·A7)
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('D6', 'D7')}
+          className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
+        >
+          VIP Center (D6·D7)
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('F6', 'F7')}
+          className="px-2.5 py-1.5 rounded-lg bg-[#1C1930] hover:bg-[#2a2444] text-slate-200 whitespace-nowrap cursor-pointer"
+        >
+          Balcony (F6·F7)
+        </button>
       </div>
 
       {/* Live Readout & Strict Seat-Only Camera Perspective Cards */}
@@ -336,12 +483,16 @@ export function AuditoriumSeatMap({
           <div
             className={`p-2.5 rounded-xl border transition-colors ${
               viewerSeatRole === 'host'
-                ? 'bg-[#8B5CF6]/25 border-[#C4B5FD]'
-                : 'bg-[#8B5CF6]/12 border-[#8B5CF6]/35'
+                ? hostIsBf
+                  ? 'bg-[#8B5CF6]/25 border-[#C4B5FD]'
+                  : 'bg-[#F472B6]/25 border-rose-200'
+                : 'bg-[#151126] border-white/15'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wider text-[#C4B5FD]">Your Seat</p>
+              <p className={`text-[10px] uppercase tracking-wider font-semibold ${hostIsBf ? 'text-[#C4B5FD]' : 'text-[#F472B6]'}`}>
+                {hostBadge} · {editingHostLabel || hostLabel}
+              </p>
               {onChangeViewerRole && (
                 <button
                   type="button"
@@ -349,11 +500,13 @@ export function AuditoriumSeatMap({
                   onClick={() => onChangeViewerRole('host')}
                   className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
                     viewerSeatRole === 'host'
-                      ? 'bg-[#8B5CF6] text-white'
+                      ? hostIsBf
+                        ? 'bg-[#8B5CF6] text-white'
+                        : 'bg-[#F472B6] text-[#080810]'
                       : 'bg-[#0B1020] text-[#C4B5FD] hover:text-white'
                   }`}
                 >
-                  {viewerSeatRole === 'host' ? 'Active View' : 'Sit Here'}
+                  {viewerSeatRole === 'host' ? 'Active View' : `Watch as ${hostBadge}`}
                 </button>
               )}
             </div>
@@ -364,13 +517,15 @@ export function AuditoriumSeatMap({
           <div
             className={`p-2.5 rounded-xl border transition-colors ${
               viewerSeatRole === 'guest'
-                ? 'bg-[#F472B6]/25 border-rose-200'
-                : 'bg-[#F472B6]/12 border-[#F472B6]/35'
+                ? guestIsBf
+                  ? 'bg-[#8B5CF6]/25 border-[#C4B5FD]'
+                  : 'bg-[#F472B6]/25 border-rose-200'
+                : 'bg-[#151126] border-white/15'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wider text-[#F472B6]">
-                {editingLabel || guestLabel}
+              <p className={`text-[10px] uppercase tracking-wider font-semibold ${guestIsBf ? 'text-[#C4B5FD]' : 'text-[#F472B6]'}`}>
+                {guestBadge} · {editingLabel || guestLabel}
               </p>
               {onChangeViewerRole && (
                 <button
@@ -379,11 +534,13 @@ export function AuditoriumSeatMap({
                   onClick={() => onChangeViewerRole('guest')}
                   className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
                     viewerSeatRole === 'guest'
-                      ? 'bg-[#F472B6] text-[#080810]'
+                      ? guestIsBf
+                        ? 'bg-[#8B5CF6] text-white'
+                        : 'bg-[#F472B6] text-[#080810]'
                       : 'bg-[#0B1020] text-[#F472B6] hover:text-white'
                   }`}
                 >
-                  {viewerSeatRole === 'guest' ? 'Active View' : 'View Her Seat'}
+                  {viewerSeatRole === 'guest' ? 'Active View' : `Watch as ${guestBadge}`}
                 </button>
               )}
             </div>
@@ -394,7 +551,7 @@ export function AuditoriumSeatMap({
         </div>
         {onChangeViewerRole && (
           <p className="text-[11px] text-slate-400 text-center">
-            3D auditorium camera is locked strictly to your seated POV ({viewerSeatRole === 'guest' ? currentGuestId : currentHostId}) — no outside views.
+            3D auditorium camera is locked strictly to your seated POV ({viewerSeatRole === 'guest' ? `${guestBadge} · ${currentGuestId}` : `${hostBadge} · ${currentHostId}`}) — synced across the cloud.
           </p>
         )}
       </div>
@@ -421,10 +578,10 @@ export function SeatMapModal(props: AuditoriumSeatMapProps & { open: boolean }) 
             </div>
             <div>
               <h2 className="font-display text-base sm:text-lg font-bold text-white">
-                Auditorium Seat Map (72 Luxury Seats)
+                Auditorium Seat Map &amp; Couple Roles (72 Seats)
               </h2>
               <p className="text-xs text-slate-300">
-                Choose where you sit and place your girlfriend anywhere in the hall — updates live in 3D.
+                Choose seats, adjust who is BF and who is GF, and sync live across the auditorium.
               </p>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import type { AudioMode, PlaybackState, QualityOption, ScreenMode } from '../types/cinema';
+import type { AudioMode, ChapterMark, PlaybackState, QualityOption, ScreenMode } from '../types/cinema';
 
 export interface PlaybackCommandInput {
   action: 'play' | 'pause' | 'seek' | 'rate' | 'chapter' | 'quality' | 'audio' | 'screenMode';
@@ -65,13 +65,17 @@ export function evaluatePlaybackDrift(
 export function applyAuthoritativeCommand(
   prev: PlaybackState,
   cmd: PlaybackCommandInput,
-  nowMs: number
+  nowMs: number,
+  actor?: { userId?: string; displayName?: string }
 ): PlaybackState {
   const projectedTime = projectAuthoritativeTime(prev, nowMs);
   const next: PlaybackState = {
     ...prev,
     updatedAt: nowMs,
     revision: prev.revision + 1,
+    lastAction: cmd.action,
+    ...(actor?.userId ? { updatedById: actor.userId } : {}),
+    ...(actor?.displayName ? { updatedByName: actor.displayName } : {}),
   };
 
   switch (cmd.action) {
@@ -119,6 +123,49 @@ export function applyAuthoritativeCommand(
   }
 
   return next;
+}
+
+export function resolveActiveChapter(
+  chapters: ChapterMark[] | undefined,
+  currentTimeSeconds: number
+): ChapterMark | null {
+  if (!chapters || chapters.length === 0) return null;
+  const sorted = [...chapters].sort((a, b) => a.timeSeconds - b.timeSeconds);
+  let active: ChapterMark = sorted[0];
+  for (const ch of sorted) {
+    if (ch.timeSeconds <= currentTimeSeconds + 0.5) {
+      active = ch;
+    } else {
+      break;
+    }
+  }
+  return active;
+}
+
+export function shouldAcceptIncomingPlaybackState(
+  current: PlaybackState | null | undefined,
+  incoming: PlaybackState | null | undefined
+): boolean {
+  if (!incoming) return false;
+  if (!current) return true;
+  if (incoming.movieId !== current.movieId) return true;
+  if (incoming.revision > current.revision) return true;
+  if (incoming.revision === current.revision && incoming.updatedAt > current.updatedAt) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldForceImmediateSyncSeek(
+  currentMediaTime: number,
+  targetTime: number,
+  incomingAction?: PlaybackState['lastAction']
+): boolean {
+  const delta = Math.abs(currentMediaTime - targetTime);
+  if (incomingAction === 'seek' || incomingAction === 'chapter' || incomingAction === 'source') {
+    return delta > 0.45;
+  }
+  return delta > 0.9;
 }
 
 export function formatTimestamp(seconds: number): string {

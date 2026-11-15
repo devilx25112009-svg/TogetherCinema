@@ -77,14 +77,26 @@ service cloud.firestore {
 
     function isValidCinemaRoom(data) {
       return data.keys().hasAll(['roomId', 'hostId', 'inviteCode', 'name', 'movieId', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['roomId', 'hostId', 'guestId', 'inviteCode', 'name', 'movieId', 'theme', 'privacy', 'defaultQuality', 'defaultAudio', 'defaultScreenMode', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'roomId', 'hostId', 'hostName', 'guestId', 'guestLabel',
+          'hostPartnerRole', 'guestPartnerRole', 'hostSeatId', 'guestSeatId',
+          'inviteCode', 'name', 'movieId', 'theme', 'privacy',
+          'defaultQuality', 'defaultAudio', 'defaultScreenMode', 'status',
+          'createdAt', 'updatedAt'
+        ])
         && isValidId(data.roomId)
         && isValidId(data.hostId)
         && isValidId(data.inviteCode)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
         && data.movieId is string && data.movieId.size() <= 128
         && data.status in ['waiting', 'ready', 'playing', 'paused', 'ended']
+        && (!('hostName' in data) || (data.hostName is string && data.hostName.size() <= 80))
         && (!('guestId' in data) || (data.guestId is string && data.guestId.size() <= 128))
+        && (!('guestLabel' in data) || (data.guestLabel is string && data.guestLabel.size() <= 40))
+        && (!('hostPartnerRole' in data) || data.hostPartnerRole in ['bf', 'gf'])
+        && (!('guestPartnerRole' in data) || data.guestPartnerRole in ['bf', 'gf'])
+        && (!('hostSeatId' in data) || (data.hostSeatId is string && data.hostSeatId.size() <= 8))
+        && (!('guestSeatId' in data) || (data.guestSeatId is string && data.guestSeatId.size() <= 8))
         && (!('theme' in data) || (data.theme is string && data.theme.size() <= 40))
         && (!('privacy' in data) || data.privacy in ['partner_only', 'invite_code'])
         && (!('defaultQuality' in data) || (data.defaultQuality is string && data.defaultQuality.size() <= 20))
@@ -92,6 +104,103 @@ service cloud.firestore {
         && (!('defaultScreenMode' in data) || (data.defaultScreenMode is string && data.defaultScreenMode.size() <= 40))
         && data.createdAt is string && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidRoomParticipant(data, participantId) {
+      return data.keys().hasAll(['userId', 'displayName', 'role', 'online', 'joinedAt'])
+        && data.keys().hasOnly([
+          'userId', 'displayName', 'avatarUrl', 'role', 'partnerRole',
+          'seatId', 'seatLabel', 'roomHostId', 'roomGuestId', 'online',
+          'joinedAt', 'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == participantId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.role in ['host', 'guest']
+        && data.online is bool
+        && data.joinedAt is string && data.joinedAt.size() <= 64
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500))
+        && (!('partnerRole' in data) || data.partnerRole in ['bf', 'gf'])
+        && (!('seatId' in data) || (data.seatId is string && data.seatId.size() <= 8))
+        && (!('seatLabel' in data) || (data.seatLabel is string && data.seatLabel.size() <= 60))
+        && (!('roomHostId' in data) || (data.roomHostId is string && data.roomHostId.size() <= 128))
+        && (!('roomGuestId' in data) || (data.roomGuestId is string && data.roomGuestId.size() <= 128))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidPlaybackState(data, roomId) {
+      return data.keys().hasAll(['roomId', 'movieId', 'currentTime', 'playing', 'playbackRate', 'revision', 'updatedAt'])
+        && data.keys().hasOnly([
+          'roomId', 'movieId', 'currentTime', 'playing', 'playbackRate',
+          'hostId', 'revision', 'quality', 'audioMode', 'screenMode',
+          'activeChapterId', 'updatedById', 'updatedByName', 'lastAction',
+          'activeMovieTitle', 'activeMovieStreamUrl', 'activeMovieThumbnailUrl',
+          'activeMovieDurationSeconds', 'updatedAtMs', 'updatedAt'
+        ])
+        && data.roomId == roomId
+        && data.movieId is string && data.movieId.size() >= 1 && data.movieId.size() <= 128
+        && data.currentTime is number && data.currentTime >= 0
+        && data.playing is bool
+        && data.playbackRate is number && data.playbackRate >= 0.25 && data.playbackRate <= 2.5
+        && data.revision is number && data.revision >= 0
+        && (!('hostId' in data) || (data.hostId is string && data.hostId.size() <= 128))
+        && (!('quality' in data) || (data.quality is string && data.quality.size() <= 20))
+        && (!('audioMode' in data) || (data.audioMode is string && data.audioMode.size() <= 40))
+        && (!('screenMode' in data) || (data.screenMode is string && data.screenMode.size() <= 40))
+        && (!('activeChapterId' in data) || (data.activeChapterId is string && data.activeChapterId.size() <= 128))
+        && (!('updatedById' in data) || (data.updatedById is string && data.updatedById.size() <= 128))
+        && (!('updatedByName' in data) || (data.updatedByName is string && data.updatedByName.size() <= 80))
+        && (!('lastAction' in data) || (data.lastAction is string && data.lastAction.size() <= 32))
+        && (!('activeMovieTitle' in data) || (data.activeMovieTitle is string && data.activeMovieTitle.size() <= 160))
+        && (!('activeMovieStreamUrl' in data) || (data.activeMovieStreamUrl is string && data.activeMovieStreamUrl.size() <= 500))
+        && (!('activeMovieThumbnailUrl' in data) || (data.activeMovieThumbnailUrl is string && data.activeMovieThumbnailUrl.size() <= 500))
+        && (!('activeMovieDurationSeconds' in data) || (data.activeMovieDurationSeconds is number && data.activeMovieDurationSeconds >= 0))
+        && (!('updatedAtMs' in data) || data.updatedAtMs is number)
+        && (data.updatedAt is string || data.updatedAt is timestamp || data.updatedAt is number);
+    }
+
+    function isValidChatMessage(data, roomId, messageId) {
+      return data.keys().hasAll(['id', 'senderId', 'senderName', 'text', 'type', 'createdAt'])
+        && data.keys().hasOnly([
+          'id', 'roomId', 'roomHostId', 'roomGuestId', 'senderId', 'senderName',
+          'text', 'type', 'gifUrl', 'voiceDurationSec', 'replyToId', 'replyPreview',
+          'reactions', 'readBy', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == messageId
+        && (!('roomId' in data) || data.roomId == roomId)
+        && (!('roomHostId' in data) || (data.roomHostId is string && data.roomHostId.size() <= 128))
+        && (!('roomGuestId' in data) || (data.roomGuestId is string && data.roomGuestId.size() <= 128))
+        && data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.text is string && data.text.size() <= 1200
+        && data.type in ['text', 'gif', 'voice', 'snack']
+        && (!('gifUrl' in data) || (data.gifUrl is string && data.gifUrl.size() <= 500))
+        && (!('voiceDurationSec' in data) || (data.voiceDurationSec is number && data.voiceDurationSec >= 0))
+        && (!('replyToId' in data) || (data.replyToId is string && data.replyToId.size() <= 128))
+        && (!('replyPreview' in data) || (data.replyPreview is string && data.replyPreview.size() <= 160))
+        && data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    function isValidCoupleInteraction(data, roomId, interactionId) {
+      return data.keys().hasAll(['id', 'roomId', 'senderId', 'senderName', 'kind', 'label', 'createdAtMs'])
+        && data.keys().hasOnly([
+          'id', 'roomId', 'roomHostId', 'roomGuestId', 'senderId', 'senderName',
+          'kind', 'label', 'createdAtMs'
+        ])
+        && isValidId(data.id) && data.id == interactionId
+        && data.roomId == roomId
+        && (!('roomHostId' in data) || (data.roomHostId is string && data.roomHostId.size() <= 128))
+        && (!('roomGuestId' in data) || (data.roomGuestId is string && data.roomGuestId.size() <= 128))
+        && data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.kind is string && data.kind.size() >= 1 && data.kind.size() <= 40
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 120
+        && data.createdAtMs is number;
+    }
+
+    function isRoomMember(roomId) {
+      let roomDoc = get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data;
+      return isSignedIn() && (roomDoc.hostId == request.auth.uid || roomDoc.guestId == request.auth.uid);
     }
 
     function isValidPartnerConnection(data) {
@@ -256,47 +365,78 @@ service cloud.firestore {
       allow update: if isValidId(roomId) && isSignedIn() && isValidCinemaRoom(incoming())
         && existing().status != 'ended'
         && (
-          (existing().hostId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'movieId', 'theme', 'defaultQuality', 'defaultAudio', 'defaultScreenMode', 'status', 'guestId', 'updatedAt']))
+          (existing().hostId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'movieId', 'theme', 'defaultQuality', 'defaultAudio', 'defaultScreenMode',
+            'status', 'guestId', 'hostName', 'guestLabel', 'hostPartnerRole', 'guestPartnerRole',
+            'hostSeatId', 'guestSeatId', 'updatedAt'
+          ]))
+          || (existing().guestId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'movieId', 'defaultQuality', 'defaultAudio', 'defaultScreenMode',
+            'status', 'hostName', 'guestLabel', 'hostPartnerRole', 'guestPartnerRole',
+            'hostSeatId', 'guestSeatId', 'updatedAt'
+          ]))
           || (existing().privacy == 'invite_code' && incoming().guestId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['guestId', 'status', 'updatedAt']))
         );
       allow delete: if isValidId(roomId) && isSignedIn() && existing().hostId == request.auth.uid;
 
       match /participants/{participantId} {
-        allow get, list: if isSignedIn() && (
-          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        allow get: if isValidId(participantId) && isSignedIn() && (
+          existing().roomHostId == request.auth.uid
+          || existing().roomGuestId == request.auth.uid
+          || isRoomMember(roomId)
         );
-        allow create, update: if isValidId(participantId) && isSignedIn() && participantId == request.auth.uid
-          && (
-            get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-            || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
-          );
+        allow list: if isSignedIn() && (
+          resource.data.roomHostId == request.auth.uid
+          || resource.data.roomGuestId == request.auth.uid
+        );
+        allow create, update: if isValidId(participantId) && isSignedIn()
+          && isValidRoomParticipant(incoming(), participantId)
+          && (participantId == request.auth.uid || isRoomMember(roomId))
+          && isRoomMember(roomId);
         allow delete: if false;
       }
 
       match /playbackStates/{stateId} {
-        allow get: if isValidId(stateId) && isSignedIn() && (
-          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
-        );
+        allow get: if isValidId(stateId) && isRoomMember(roomId);
         allow list: if false;
-        allow create, update: if isValidId(stateId) && isSignedIn() && (
-          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
-        );
+        allow create, update: if isValidId(stateId) && isRoomMember(roomId) && isValidPlaybackState(incoming(), roomId);
         allow delete: if false;
       }
 
       match /chatMessages/{messageId} {
-        allow get, list: if isSignedIn() && (
-          get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-          || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
+        allow get: if isValidId(messageId) && isSignedIn() && (
+          existing().roomHostId == request.auth.uid
+          || existing().roomGuestId == request.auth.uid
+          || isRoomMember(roomId)
         );
-        allow create: if isValidId(messageId) && isSignedIn() && incoming().senderId == request.auth.uid
-          && (
-            get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.hostId == request.auth.uid
-            || get(/databases/$(database)/documents/cinemaRooms/$(roomId)).data.guestId == request.auth.uid
-          );
+        allow list: if isSignedIn() && (
+          resource.data.roomHostId == request.auth.uid
+          || resource.data.roomGuestId == request.auth.uid
+        );
+        allow create: if isValidId(messageId) && isSignedIn()
+          && isValidChatMessage(incoming(), roomId, messageId)
+          && incoming().senderId == request.auth.uid
+          && isRoomMember(roomId);
+        allow update: if isValidId(messageId) && isRoomMember(roomId)
+          && isValidChatMessage(incoming(), roomId, messageId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'readBy']);
+        allow delete: if false;
+      }
+
+      match /interactions/{interactionId} {
+        allow get: if isValidId(interactionId) && isSignedIn() && (
+          existing().roomHostId == request.auth.uid
+          || existing().roomGuestId == request.auth.uid
+          || isRoomMember(roomId)
+        );
+        allow list: if isSignedIn() && (
+          resource.data.roomHostId == request.auth.uid
+          || resource.data.roomGuestId == request.auth.uid
+        );
+        allow create: if isValidId(interactionId) && isSignedIn()
+          && isValidCoupleInteraction(incoming(), roomId, interactionId)
+          && incoming().senderId == request.auth.uid
+          && isRoomMember(roomId);
         allow update, delete: if false;
       }
     }

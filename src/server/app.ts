@@ -7,12 +7,13 @@ import type {
   CoupleReactionEvent,
   MemoryItemRecord,
   MovieRecord,
+  PartnerGenderRole,
   RoomParticipant,
   SnackItemRecord,
   WatchlistItemRecord,
 } from '../types/cinema';
 import { calculateOptimalChunkPlan, validateVideoUpload } from '../utils/uploadLogic';
-import { formatSeatLabel, getSeatById, resolveCoupleSeats } from '../utils/seatMap';
+import { formatSeatLabel, getSeatById, resolveCoupleRoles, resolveCoupleSeats } from '../utils/seatMap';
 import { applyAuthoritativeCommand, type PlaybackCommandInput } from '../utils/playbackSync';
 import { parseYouTubeUrl } from '../utils/youtube';
 import {
@@ -22,6 +23,11 @@ import {
 } from './processing/VideoProcessor';
 import { createStorageProvider } from './storage/StorageProvider';
 import { CinemaStore } from './store/cinemaStore';
+import {
+  hydrateRoomFromCloud,
+  lookupRoomIdByInviteInCloud,
+  pushRoomBundleToCloud,
+} from './store/cloudRoomBridge';
 
 export type RoomBroadcaster = (roomId: string, payload: unknown) => void;
 
@@ -123,6 +129,14 @@ export function createCinemaExpressApp(): CinemaExpressContext {
     uid: String(req.headers['x-user-id'] || 'demo-partner-a').slice(0, 128),
     displayName: String(req.headers['x-user-name'] || 'Aayush').slice(0, 80),
   });
+
+  const getBearerToken = (req: Request): string | null => {
+    const authHeader = String(req.headers.authorization || '');
+    if (authHeader.toLowerCase().startsWith('bearer ')) {
+      return authHeader.slice(7).trim() || null;
+    }
+    return null;
+  };
 
   // ---------------------------------------------------------------------------
   // Health & Infrastructure Capabilities
@@ -590,6 +604,7 @@ export function createCinemaExpressApp(): CinemaExpressContext {
 
   app.post('/api/rooms', async (req: Request, res: Response) => {
     const { uid, displayName } = getActor(req);
+    const bearerToken = getBearerToken(req);
     const body = req.body as Partial<CinemaRoomRecord>;
     if (!body.name?.trim()) {
       res.status(400).json({ error: 'Room name is required.' });
@@ -597,20 +612,27 @@ export function createCinemaExpressApp(): CinemaExpressContext {
     }
     const snap = store.getSnapshot();
     const movieId = body.movieId || snap.movies[0]?.id || 'mov-midnight-orbit';
+    const roomMovie = snap.movies.find((m) => m.id === movieId) || snap.movies[0] || null;
     const roomId = `room_${Date.now().toString(36)}`;
     const inviteCode = `CIN-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const now = new Date().toISOString();
 
     const resolvedSeats = resolveCoupleSeats(body.hostSeatId, body.guestSeatId);
+    const resolvedRoles = resolveCoupleRoles(body.hostPartnerRole, body.guestPartnerRole);
+    const defaultPartnerRoleBadge = resolvedRoles.guestPartnerRole === 'bf' ? 'BF' : 'GF';
 
     const room: CinemaRoomRecord = {
       roomId,
       hostId: uid,
-      hostName: displayName,
+      hostName: (typeof body.hostName === 'string' && body.hostName.trim().slice(0, 80)) || displayName,
       guestId: snap.connections[uid]?.partnerId,
       guestLabel:
         (typeof body.guestLabel === 'string' && body.guestLabel.trim().slice(0, 40)) ||
-        (snap.connections[uid]?.partnerName ? `${snap.connections[uid].partnerName} (GF)` : 'My GF'),
+        (snap.connections[uid]?.partnerName
+          ? `${snap.connections[uid].partnerName} (${defaultPartnerRoleBadge})`
+          : `My ${defaultPartnerRoleBadge}`),
+      hostPartnerRole: resolvedRoles.hostPartnerRole,
+      guestPartnerRole: resolvedRoles.guestPartnerRole,
       hostSeatId: resolvedSeats.hostSeat.id,
       guestSeatId: resolvedSeats.guestSeat.id,
       inviteCode,
@@ -639,12 +661,18 @@ export function createCinemaExpressApp(): CinemaExpressContext {
       quality: room.defaultQuality,
       audioMode: room.defaultAudio,
       screenMode: room.defaultScreenMode,
+      activeMovieTitle: roomMovie?.title,
+      activeMovieStreamUrl: roomMovie?.streamUrl,
+      activeMovieThumbnailUrl: roomMovie?.thumbnailUrl,
+      activeMovieDurationSeconds: roomMovie?.durationSeconds,
+      activeMovieChapters: roomMovie?.chapters,
     };
     snap.participants[roomId] = [
       {
         userId: uid,
-        displayName,
+        displayName: room.hostName,
         role: 'host',
+        partnerRole: resolvedRoles.hostPartnerRole,
         online: true,
         seatId: resolvedSeats.hostSeat.id,
         seatLabel: formatSeatLabel(resolvedSeats.hostSeat.id),
@@ -654,18 +682,37 @@ export function createCinemaExpressApp(): CinemaExpressContext {
     snap.chats[roomId] = [];
 
     await store.save();
+    await pushRoomBundleToCloud(
+      {
+        room,
+        movie: roomMovie,
+        playbackState: snap.playbackStates[roomId],
+        participants: snap.participants[roomId],
+        chatHistory: snap.chats[roomId],
+        savedAtMs: Date.now(),
+      },
+      bearerToken
+    );
     res.status(201).json({ room });
   });
 
   app.post('/api/rooms/join', async (req: Request, res: Response) => {
     const { uid, displayName } = getActor(req);
+    const bearerToken = getBearerToken(req);
     const code = String((req.body as { inviteCode?: string })?.inviteCode || '').trim().toUpperCase();
     if (!code) {
       res.status(400).json({ error: 'Please enter an invitation code.' });
       return;
     }
     const snap = store.getSnapshot();
-    const room = snap.rooms.find((r) => r.inviteCode.toUpperCase() === code || r.roomId === code);
+    let room = snap.rooms.find((r) => r.inviteCode.toUpperCase() === code || r.roomId.toUpperCase() === code);
+    if (!room) {
+      const cloudRoomId = await lookupRoomIdByInviteInCloud(code);
+      if (cloudRoomId) {
+        await hydrateRoomFromCloud(cloudRoomId, store, bearerToken);
+        room = snap.rooms.find((r) => r.roomId === cloudRoomId);
+      }
+    }
     if (!room) {
       res.status(404).json({ error: 'No cinema room found with that invitation code.' });
       return;
@@ -680,13 +727,19 @@ export function createCinemaExpressApp(): CinemaExpressContext {
     }
     if (!snap.participants[room.roomId]) snap.participants[room.roomId] = [];
     const resolvedSeats = resolveCoupleSeats(room.hostSeatId, room.guestSeatId);
+    const resolvedRoles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
+    room.hostPartnerRole = resolvedRoles.hostPartnerRole;
+    room.guestPartnerRole = resolvedRoles.guestPartnerRole;
     const joinRole = room.hostId === uid ? 'host' : 'guest';
     const assignedSeatId = joinRole === 'host' ? resolvedSeats.hostSeat.id : resolvedSeats.guestSeat.id;
+    const assignedPartnerRole =
+      joinRole === 'host' ? resolvedRoles.hostPartnerRole : resolvedRoles.guestPartnerRole;
     if (!snap.participants[room.roomId].some((p) => p.userId === uid)) {
       snap.participants[room.roomId].push({
         userId: uid,
         displayName,
         role: joinRole,
+        partnerRole: assignedPartnerRole,
         online: true,
         seatId: assignedSeatId,
         seatLabel: formatSeatLabel(assignedSeatId),
@@ -694,46 +747,129 @@ export function createCinemaExpressApp(): CinemaExpressContext {
       });
     }
     await store.save();
+    await pushRoomBundleToCloud(
+      {
+        room,
+        movie: snap.movies.find((m) => m.id === room!.movieId) || null,
+        playbackState: snap.playbackStates[room.roomId],
+        participants: snap.participants[room.roomId],
+        chatHistory: snap.chats[room.roomId] || [],
+        savedAtMs: Date.now(),
+      },
+      bearerToken
+    );
     res.json({ room });
   });
 
-  app.get('/api/rooms/:roomId', (req: Request, res: Response) => {
-    const snap = store.getSnapshot();
-    const room = snap.rooms.find((r) => r.roomId === req.params.roomId);
-    if (!room) {
-      res.status(404).json({ error: 'No cinema room found.' });
-      return;
-    }
-    const movie = snap.movies.find((m) => m.id === room.movieId) || snap.movies[0] || null;
-    const hydratedMovie = movie ? hydrateMovieForPlayback(movie) : null;
-
-    res.json({
-      room,
-      movie: hydratedMovie,
-      playbackState: snap.playbackStates[room.roomId],
-      participants: snap.participants[room.roomId] || [],
-      chatHistory: snap.chats[room.roomId] || [],
-    });
-  });
-
-  // HTTP Live Sync polling endpoint (used seamlessly when WebSockets are unavailable, e.g. Vercel Serverless)
-  app.get('/api/rooms/:roomId/sync', (req: Request, res: Response) => {
-    const snap = store.getSnapshot();
+  app.get('/api/rooms/:roomId', async (req: Request, res: Response) => {
     const roomId = String(req.params.roomId || '');
+    const bearerToken = getBearerToken(req);
+    await hydrateRoomFromCloud(roomId, store, bearerToken);
+
+    const snap = store.getSnapshot();
     const room = snap.rooms.find((r) => r.roomId === roomId);
     if (!room) {
       res.status(404).json({ error: 'No cinema room found.' });
       return;
     }
+    const roles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
+    room.hostPartnerRole = roles.hostPartnerRole;
+    room.guestPartnerRole = roles.guestPartnerRole;
+
+    const pb = snap.playbackStates[room.roomId];
+    let movie = snap.movies.find((m) => m.id === room.movieId) || snap.movies[0] || null;
+    if (pb?.activeMovieStreamUrl && (!movie || movie.id !== pb.movieId)) {
+      movie = {
+        id: pb.movieId,
+        ownerId: room.hostId,
+        title: pb.activeMovieTitle || room.name,
+        description: 'Synchronized cloud theatre screening',
+        genre: 'Cloud Theatre',
+        durationSeconds: pb.activeMovieDurationSeconds || 5400,
+        fileSizeBytes: 0,
+        resolution: '1080p Full HD',
+        sourceHeight: 1080,
+        stereoscopicFormat: 'none',
+        videoFormat: pb.activeMovieStreamUrl.startsWith('youtube://') ? 'YouTube Stream' : 'Stream',
+        audioFormat: 'Stereo',
+        subtitles: [{ id: 'sub-en', label: 'English', language: 'en' }],
+        audioTracks: [{ id: 'aud-1', label: 'Original Audio', language: 'en', channels: '2.0' }],
+        chapters: pb.activeMovieChapters || [{ id: 'ch-1', title: '01. Start', timeSeconds: 0 }],
+        thumbnailUrl: pb.activeMovieThumbnailUrl || '/images/poster_midnight_orbit_1794680182030.jpg',
+        streamUrl: pb.activeMovieStreamUrl,
+        processingStatus: 'ready',
+        collectionName: 'Cloud Sync',
+        playbackProgress: 0,
+        isFavourite: false,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
+      };
+    }
+    const hydratedMovie = movie ? hydrateMovieForPlayback(movie) : null;
+
+    res.json({
+      room,
+      movie: hydratedMovie,
+      playbackState: pb,
+      participants: snap.participants[room.roomId] || [],
+      chatHistory: snap.chats[room.roomId] || [],
+      serverTime: Date.now(),
+    });
+  });
+
+  // HTTP Live Sync polling endpoint (used seamlessly when WebSockets are unavailable, e.g. Vercel Serverless)
+  app.get('/api/rooms/:roomId/sync', async (req: Request, res: Response) => {
+    const roomId = String(req.params.roomId || '');
+    const bearerToken = getBearerToken(req);
+    await hydrateRoomFromCloud(roomId, store, bearerToken);
+
+    const snap = store.getSnapshot();
+    const room = snap.rooms.find((r) => r.roomId === roomId);
+    if (!room) {
+      res.status(404).json({ error: 'No cinema room found.' });
+      return;
+    }
+    const roles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
+    room.hostPartnerRole = roles.hostPartnerRole;
+    room.guestPartnerRole = roles.guestPartnerRole;
+
     const since = Number(req.query.since || 0);
-    const movie = snap.movies.find((m) => m.id === room.movieId) || snap.movies[0] || null;
+    const pb = snap.playbackStates[roomId];
+    let movie = snap.movies.find((m) => m.id === room.movieId) || snap.movies[0] || null;
+    if (pb?.activeMovieStreamUrl && (!movie || movie.id !== pb.movieId)) {
+      movie = {
+        id: pb.movieId,
+        ownerId: room.hostId,
+        title: pb.activeMovieTitle || room.name,
+        description: 'Synchronized cloud theatre screening',
+        genre: 'Cloud Theatre',
+        durationSeconds: pb.activeMovieDurationSeconds || 5400,
+        fileSizeBytes: 0,
+        resolution: '1080p Full HD',
+        sourceHeight: 1080,
+        stereoscopicFormat: 'none',
+        videoFormat: pb.activeMovieStreamUrl.startsWith('youtube://') ? 'YouTube Stream' : 'Stream',
+        audioFormat: 'Stereo',
+        subtitles: [{ id: 'sub-en', label: 'English', language: 'en' }],
+        audioTracks: [{ id: 'aud-1', label: 'Original Audio', language: 'en', channels: '2.0' }],
+        chapters: pb.activeMovieChapters || [{ id: 'ch-1', title: '01. Start', timeSeconds: 0 }],
+        thumbnailUrl: pb.activeMovieThumbnailUrl || '/images/poster_midnight_orbit_1794680182030.jpg',
+        streamUrl: pb.activeMovieStreamUrl,
+        processingStatus: 'ready',
+        collectionName: 'Cloud Sync',
+        playbackProgress: 0,
+        isFavourite: false,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
+      };
+    }
     const hydratedMovie = movie ? hydrateMovieForPlayback(movie) : null;
     const events = (recentReactions.get(roomId) || []).filter((e) => e.createdAt > since);
 
     res.json({
       room,
       movie: hydratedMovie,
-      playbackState: snap.playbackStates[roomId],
+      playbackState: pb,
       participants: snap.participants[roomId] || [],
       chatHistory: snap.chats[roomId] || [],
       reactions: events,
@@ -744,8 +880,11 @@ export function createCinemaExpressApp(): CinemaExpressContext {
   // HTTP Room Event ingestion endpoint (mirrors WebSocket actions for serverless deployments)
   app.post('/api/rooms/:roomId/events', async (req: Request, res: Response) => {
     const { uid, displayName } = getActor(req);
-    const snap = store.getSnapshot();
+    const bearerToken = getBearerToken(req);
     const roomId = String(req.params.roomId || '');
+    await hydrateRoomFromCloud(roomId, store, bearerToken);
+
+    const snap = store.getSnapshot();
     const room = snap.rooms.find((r) => r.roomId === roomId);
     if (!room) {
       res.status(404).json({ error: 'Cinema room not found.' });
@@ -754,18 +893,25 @@ export function createCinemaExpressApp(): CinemaExpressContext {
 
     const msg = (req.body || {}) as { type?: string; [key: string]: unknown };
     const resolvedSeats = resolveCoupleSeats(room.hostSeatId, room.guestSeatId);
+    const resolvedRoles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
+    room.hostPartnerRole = resolvedRoles.hostPartnerRole;
+    room.guestPartnerRole = resolvedRoles.guestPartnerRole;
+
     if (!snap.participants[roomId]) snap.participants[roomId] = [];
     const existingP = snap.participants[roomId].find((p) => p.userId === uid);
     const role = room.hostId === uid ? 'host' : 'guest';
     const assignedSeatId = role === 'host' ? resolvedSeats.hostSeat.id : resolvedSeats.guestSeat.id;
+    const assignedPartnerRole = role === 'host' ? resolvedRoles.hostPartnerRole : resolvedRoles.guestPartnerRole;
     if (existingP) {
       existingP.online = true;
       existingP.displayName = displayName;
+      existingP.partnerRole = assignedPartnerRole;
     } else {
       snap.participants[roomId].push({
         userId: uid,
         displayName,
         role,
+        partnerRole: assignedPartnerRole,
         online: true,
         seatId: assignedSeatId,
         seatLabel: formatSeatLabel(assignedSeatId),
@@ -788,11 +934,22 @@ export function createCinemaExpressApp(): CinemaExpressContext {
         screenMode: room.defaultScreenMode,
       };
       const cmd = msg.command as PlaybackCommandInput;
-      const next = applyAuthoritativeCommand(current, cmd, Date.now());
+      const next = applyAuthoritativeCommand(current, cmd, Date.now(), { userId: uid, displayName });
       snap.playbackStates[roomId] = next;
       room.status = next.playing ? 'playing' : 'paused';
       room.updatedAt = new Date().toISOString();
       await store.save();
+      await pushRoomBundleToCloud(
+        {
+          room,
+          movie: snap.movies.find((m) => m.id === room.movieId) || null,
+          playbackState: next,
+          participants: snap.participants[roomId],
+          chatHistory: snap.chats[roomId] || [],
+          savedAtMs: Date.now(),
+        },
+        bearerToken
+      );
 
       broadcastToRoom(roomId, {
         type: 'playback:state',
@@ -830,6 +987,17 @@ export function createCinemaExpressApp(): CinemaExpressContext {
         snap.chats[roomId] = snap.chats[roomId].slice(-200);
       }
       await store.save();
+      await pushRoomBundleToCloud(
+        {
+          room,
+          movie: snap.movies.find((m) => m.id === room.movieId) || null,
+          playbackState: snap.playbackStates[roomId],
+          participants: snap.participants[roomId],
+          chatHistory: snap.chats[roomId],
+          savedAtMs: Date.now(),
+        },
+        bearerToken
+      );
       broadcastToRoom(roomId, { type: 'chat:message', message: entry });
       res.json({ ok: true, message: entry });
       return;
@@ -905,9 +1073,13 @@ export function createCinemaExpressApp(): CinemaExpressContext {
   });
 
   app.post('/api/rooms/:roomId/source', async (req: Request, res: Response) => {
-    const { uid } = getActor(req);
+    const { uid, displayName } = getActor(req);
+    const bearerToken = getBearerToken(req);
+    const roomId = String(req.params.roomId || '');
+    await hydrateRoomFromCloud(roomId, store, bearerToken);
+
     const snap = store.getSnapshot();
-    const room = snap.rooms.find((r) => r.roomId === req.params.roomId);
+    const room = snap.rooms.find((r) => r.roomId === roomId);
     if (!room) {
       res.status(404).json({ error: 'Cinema room not found.' });
       return;
@@ -984,11 +1156,31 @@ export function createCinemaExpressApp(): CinemaExpressContext {
       quality: prevState?.quality || room.defaultQuality,
       audioMode: prevState?.audioMode || room.defaultAudio,
       screenMode: prevState?.screenMode || room.defaultScreenMode,
+      updatedById: uid,
+      updatedByName: displayName,
+      lastAction: 'source' as const,
+      activeMovieTitle: targetMovie.title,
+      activeMovieStreamUrl: targetMovie.streamUrl,
+      activeMovieThumbnailUrl: targetMovie.thumbnailUrl,
+      activeMovieDurationSeconds: targetMovie.durationSeconds,
+      activeMovieChapters: targetMovie.chapters,
     };
     snap.playbackStates[room.roomId] = nextState;
     await store.save();
 
     const hydratedMovie = hydrateMovieForPlayback(targetMovie);
+    await pushRoomBundleToCloud(
+      {
+        room,
+        movie: hydratedMovie,
+        playbackState: nextState,
+        participants: snap.participants[room.roomId] || [],
+        chatHistory: snap.chats[room.roomId] || [],
+        savedAtMs: Date.now(),
+      },
+      bearerToken
+    );
+
     broadcastToRoom(room.roomId, {
       type: 'room:source',
       room,
@@ -1000,8 +1192,12 @@ export function createCinemaExpressApp(): CinemaExpressContext {
   });
 
   app.post('/api/rooms/:roomId/seats', async (req: Request, res: Response) => {
+    const bearerToken = getBearerToken(req);
+    const roomId = String(req.params.roomId || '');
+    await hydrateRoomFromCloud(roomId, store, bearerToken);
+
     const snap = store.getSnapshot();
-    const room = snap.rooms.find((r) => r.roomId === req.params.roomId);
+    const room = snap.rooms.find((r) => r.roomId === roomId);
     if (!room) {
       res.status(404).json({ error: 'Cinema room not found.' });
       return;
@@ -1010,7 +1206,10 @@ export function createCinemaExpressApp(): CinemaExpressContext {
     const body = (req.body || {}) as {
       hostSeatId?: string;
       guestSeatId?: string;
+      hostName?: string;
       guestLabel?: string;
+      hostPartnerRole?: PartnerGenderRole;
+      guestPartnerRole?: PartnerGenderRole;
     };
 
     if (body.hostSeatId && !getSeatById(body.hostSeatId)) {
@@ -1026,8 +1225,17 @@ export function createCinemaExpressApp(): CinemaExpressContext {
       body.hostSeatId || room.hostSeatId,
       body.guestSeatId || room.guestSeatId
     );
+    const resolvedRoles = resolveCoupleRoles(
+      body.hostPartnerRole ?? room.hostPartnerRole,
+      body.guestPartnerRole ?? room.guestPartnerRole
+    );
     room.hostSeatId = resolved.hostSeat.id;
     room.guestSeatId = resolved.guestSeat.id;
+    room.hostPartnerRole = resolvedRoles.hostPartnerRole;
+    room.guestPartnerRole = resolvedRoles.guestPartnerRole;
+    if (typeof body.hostName === 'string' && body.hostName.trim()) {
+      room.hostName = body.hostName.trim().slice(0, 80);
+    }
     if (typeof body.guestLabel === 'string' && body.guestLabel.trim()) {
       room.guestLabel = body.guestLabel.trim().slice(0, 40);
     }
@@ -1038,9 +1246,22 @@ export function createCinemaExpressApp(): CinemaExpressContext {
       const nextId = participant.role === 'host' ? resolved.hostSeat.id : resolved.guestSeat.id;
       participant.seatId = nextId;
       participant.seatLabel = formatSeatLabel(nextId);
+      participant.partnerRole =
+        participant.role === 'host' ? resolvedRoles.hostPartnerRole : resolvedRoles.guestPartnerRole;
     }
 
     await store.save();
+    await pushRoomBundleToCloud(
+      {
+        room,
+        movie: snap.movies.find((m) => m.id === room.movieId) || null,
+        playbackState: snap.playbackStates[room.roomId],
+        participants: snap.participants[room.roomId],
+        chatHistory: snap.chats[room.roomId] || [],
+        savedAtMs: Date.now(),
+      },
+      bearerToken
+    );
     broadcastToRoom(room.roomId, {
       type: 'room:seats',
       room,

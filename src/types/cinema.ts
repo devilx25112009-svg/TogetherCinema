@@ -123,6 +123,8 @@ export interface UploadSessionRecord {
   updatedAt: string;
 }
 
+export type PartnerGenderRole = 'bf' | 'gf';
+
 export interface PlaybackState {
   roomId: string;
   movieId: string;
@@ -136,6 +138,14 @@ export interface PlaybackState {
   audioMode: AudioMode;
   screenMode: ScreenMode;
   activeChapterId?: string;
+  updatedById?: string;
+  updatedByName?: string;
+  lastAction?: 'play' | 'pause' | 'seek' | 'chapter' | 'rate' | 'quality' | 'audio' | 'screenMode' | 'source';
+  activeMovieTitle?: string;
+  activeMovieStreamUrl?: string;
+  activeMovieThumbnailUrl?: string;
+  activeMovieDurationSeconds?: number;
+  activeMovieChapters?: ChapterMark[];
 }
 
 export interface RoomParticipant {
@@ -143,6 +153,7 @@ export interface RoomParticipant {
   displayName: string;
   avatarUrl?: string;
   role: 'host' | 'guest';
+  partnerRole?: PartnerGenderRole;
   online: boolean;
   seatId?: string;
   seatLabel: string;
@@ -155,6 +166,8 @@ export interface CinemaRoomRecord {
   hostName: string;
   guestId?: string;
   guestLabel?: string;
+  hostPartnerRole?: PartnerGenderRole;
+  guestPartnerRole?: PartnerGenderRole;
   hostSeatId?: string;
   guestSeatId?: string;
   inviteCode: string;

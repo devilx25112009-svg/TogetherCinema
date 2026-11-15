@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type {
   CoupleReactionEvent,
+  PartnerGenderRole,
   RoomParticipant,
   ScreenMode,
 } from '../../types/cinema';
@@ -14,6 +15,7 @@ import {
   computeSeatPovCamera,
   DEFAULT_GUEST_SEAT_ID,
   DEFAULT_HOST_SEAT_ID,
+  resolveCoupleRoles,
   resolveCoupleSeats,
   type ViewerSeatRole,
 } from '../../utils/seatMap';
@@ -57,6 +59,8 @@ interface CinemaAuditoriumSceneProps {
   recenterSignal?: number;
   hostSeatId?: string;
   guestSeatId?: string;
+  hostPartnerRole?: PartnerGenderRole;
+  guestPartnerRole?: PartnerGenderRole;
   viewerSeatRole?: ViewerSeatRole;
 }
 
@@ -152,6 +156,8 @@ export function CinemaAuditoriumScene({
   recenterSignal = 0,
   hostSeatId = DEFAULT_HOST_SEAT_ID,
   guestSeatId = DEFAULT_GUEST_SEAT_ID,
+  hostPartnerRole = 'bf',
+  guestPartnerRole = 'gf',
   viewerSeatRole = 'host',
 }: CinemaAuditoriumSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -166,6 +172,8 @@ export function CinemaAuditoriumScene({
   const participantsRef = useRef(participants);
   const hostSeatIdRef = useRef(hostSeatId);
   const guestSeatIdRef = useRef(guestSeatId);
+  const hostPartnerRoleRef = useRef<PartnerGenderRole>(hostPartnerRole);
+  const guestPartnerRoleRef = useRef<PartnerGenderRole>(guestPartnerRole);
   const viewerSeatRoleRef = useRef<ViewerSeatRole>(viewerSeatRole);
   const lookOffsetRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
 
@@ -205,6 +213,10 @@ export function CinemaAuditoriumScene({
     hostSeatIdRef.current = hostSeatId;
     guestSeatIdRef.current = guestSeatId;
   }, [hostSeatId, guestSeatId]);
+  useEffect(() => {
+    hostPartnerRoleRef.current = hostPartnerRole;
+    guestPartnerRoleRef.current = guestPartnerRole;
+  }, [hostPartnerRole, guestPartnerRole]);
   useEffect(() => {
     viewerSeatRoleRef.current = viewerSeatRole;
   }, [viewerSeatRole]);
@@ -519,15 +531,22 @@ export function CinemaAuditoriumScene({
     const guestSeatHalo = new THREE.Mesh(seatHaloGeo, guestHaloMat);
     scene.add(hostSeatHalo, guestSeatHalo);
 
-    // Realistic Articulated Seated 3D Human Couple Rigs + First-Person Embodied Arms + 3D Effects
-    const hostRig = createRealisticHumanRig('host');
-    const partnerRig = createRealisticHumanRig('gf');
-    const fpHostArms = createFirstPersonCoupleArms('host');
+    // Realistic Articulated Seated 3D Human Couple Rigs (BF/GF variants) + First-Person Arms + 3D Effects
+    const hostRigBf = createRealisticHumanRig('bf');
+    const hostRigGf = createRealisticHumanRig('gf');
+    const partnerRigBf = createRealisticHumanRig('bf');
+    const partnerRigGf = createRealisticHumanRig('gf');
+    const fpHostArms = createFirstPersonCoupleArms('bf');
     const fpGuestArms = createFirstPersonCoupleArms('gf');
     const interactionFx = createCoupleInteractionEffects(scene);
-    const hostAvatar = hostRig.root;
-    const partnerAvatar = partnerRig.root;
-    scene.add(fpHostArms.root, fpGuestArms.root);
+    scene.add(
+      hostRigBf.root,
+      hostRigGf.root,
+      partnerRigBf.root,
+      partnerRigGf.root,
+      fpHostArms.root,
+      fpGuestArms.root
+    );
 
     // Shared Popcorn Tub & Rose Cup resting on the armrest beside Host's seat
     const snackProps = new THREE.Group();
@@ -545,15 +564,20 @@ export function CinemaAuditoriumScene({
     );
     cupDrinkL.position.set(0.53, 0.7, -0.24);
     snackProps.add(popcornTub, popcornTop, cupDrinkL);
-    scene.add(hostAvatar, partnerAvatar, snackProps);
+    scene.add(snackProps);
 
     // Initialize immediate seat placement before first draw so frame 1 already shows exact seats
     const initialPair = resolveCoupleSeats(hostSeatIdRef.current, guestSeatIdRef.current);
+    const initialRoles = resolveCoupleRoles(hostPartnerRoleRef.current, guestPartnerRoleRef.current);
     let lastAppliedHostSeat = initialPair.hostSeat.id;
     let lastAppliedGuestSeat = initialPair.guestSeat.id;
     auditoriumSeats.updateCoupleSeats(initialPair.hostSeat.id, initialPair.guestSeat.id);
-    hostAvatar.position.set(...initialPair.hostSeat.position);
-    partnerAvatar.position.set(...initialPair.guestSeat.position);
+    hostRigBf.root.position.set(...initialPair.hostSeat.position);
+    hostRigGf.root.position.set(...initialPair.hostSeat.position);
+    partnerRigBf.root.position.set(...initialPair.guestSeat.position);
+    partnerRigGf.root.position.set(...initialPair.guestSeat.position);
+    hostHaloMat.color.setHex(initialRoles.hostPartnerRole === 'bf' ? 0x8b5cf6 : 0xf472b6);
+    guestHaloMat.color.setHex(initialRoles.guestPartnerRole === 'bf' ? 0x8b5cf6 : 0xf472b6);
     snackProps.position.set(...initialPair.hostSeat.position);
     hostSeatHalo.position.set(
       initialPair.hostSeat.position[0],
@@ -934,15 +958,30 @@ export function CinemaAuditoriumScene({
       const forwardLeanZ = activeChoreo ? activeChoreo.contactForwardZ * interactionEnv : 0;
       const verticalContactY = activeChoreo ? activeChoreo.contactHeightOffset * interactionEnv : 0;
 
+      const currentRoles = resolveCoupleRoles(hostPartnerRoleRef.current, guestPartnerRoleRef.current);
+      hostHaloMat.color.setHex(currentRoles.hostPartnerRole === 'bf' ? 0x8b5cf6 : 0xf472b6);
+      guestHaloMat.color.setHex(currentRoles.guestPartnerRole === 'bf' ? 0x8b5cf6 : 0xf472b6);
+      const activeHostRig = currentRoles.hostPartnerRole === 'gf' ? hostRigGf : hostRigBf;
+      const inactiveHostRig = currentRoles.hostPartnerRole === 'gf' ? hostRigBf : hostRigGf;
+      const activePartnerRig = currentRoles.guestPartnerRole === 'bf' ? partnerRigBf : partnerRigGf;
+      const inactivePartnerRig = currentRoles.guestPartnerRole === 'bf' ? partnerRigGf : partnerRigBf;
+      inactiveHostRig.root.visible = false;
+      inactivePartnerRig.root.visible = false;
+      const hostAvatar = activeHostRig.root;
+      const partnerAvatar = activePartnerRig.root;
+
       const hostTargetX = couple.hostSeat.position[0] + (adjacentCouple ? -guestLeanDir * (0.08 + extraLeanShift * 0.25) : 0);
       const hostTargetY =
         couple.hostSeat.position[1] +
         (spec.isMotion4DX && playingRef.current ? Math.max(0, motionY * 0.55) : 0) +
         verticalContactY * 0.35;
       const hostTargetZ = couple.hostSeat.position[2] - 0.1 - forwardLeanZ * 0.45;
-      hostAvatar.position.x = THREE.MathUtils.lerp(hostAvatar.position.x, hostTargetX, seatDamp);
-      hostAvatar.position.y = THREE.MathUtils.lerp(hostAvatar.position.y, hostTargetY, seatDamp);
-      hostAvatar.position.z = THREE.MathUtils.lerp(hostAvatar.position.z, hostTargetZ, seatDamp);
+      hostRigBf.root.position.set(
+        THREE.MathUtils.lerp(hostRigBf.root.position.x, hostTargetX, seatDamp),
+        THREE.MathUtils.lerp(hostRigBf.root.position.y, hostTargetY, seatDamp),
+        THREE.MathUtils.lerp(hostRigBf.root.position.z, hostTargetZ, seatDamp)
+      );
+      hostRigGf.root.position.copy(hostRigBf.root.position);
 
       const guestTargetX = couple.guestSeat.position[0] + (adjacentCouple ? guestLeanDir * (0.14 + extraLeanShift) : 0);
       const guestTargetY =
@@ -950,15 +989,18 @@ export function CinemaAuditoriumScene({
         (spec.isMotion4DX && playingRef.current ? Math.max(0, motionY * 0.55) : 0) +
         verticalContactY;
       const guestTargetZ = couple.guestSeat.position[2] - 0.12 - forwardLeanZ;
-      partnerAvatar.position.x = THREE.MathUtils.lerp(partnerAvatar.position.x, guestTargetX, seatDamp);
-      partnerAvatar.position.y = THREE.MathUtils.lerp(partnerAvatar.position.y, guestTargetY, seatDamp);
-      partnerAvatar.position.z = THREE.MathUtils.lerp(partnerAvatar.position.z, guestTargetZ, seatDamp);
+      partnerRigGf.root.position.set(
+        THREE.MathUtils.lerp(partnerRigGf.root.position.x, guestTargetX, seatDamp),
+        THREE.MathUtils.lerp(partnerRigGf.root.position.y, guestTargetY, seatDamp),
+        THREE.MathUtils.lerp(partnerRigGf.root.position.z, guestTargetZ, seatDamp)
+      );
+      partnerRigBf.root.position.copy(partnerRigGf.root.position);
 
-      // Animate articulated torso, neck, head, eyelids, lips, blush, arms & props for both couple rigs
+      // Animate articulated torso, neck, head, eyelids, lips, blush, arms & props for both active rigs
       const hostToGuestDir = Math.sign(couple.guestSeat.position[0] - couple.hostSeat.position[0]) || 1;
       const guestToHostDir = -hostToGuestDir;
-      updateHumanRigAnimation(hostRig, activeKind, interactionProgress, adjacentCouple ? hostToGuestDir : 0, dt, elapsed);
-      updateHumanRigAnimation(partnerRig, activeKind, interactionProgress, adjacentCouple ? guestToHostDir : 0, dt, elapsed);
+      updateHumanRigAnimation(activeHostRig, activeKind, interactionProgress, adjacentCouple ? hostToGuestDir : 0, dt, elapsed);
+      updateHumanRigAnimation(activePartnerRig, activeKind, interactionProgress, adjacentCouple ? guestToHostDir : 0, dt, elapsed);
 
       snackProps.position.set(hostTargetX, hostTargetY, couple.hostSeat.position[2]);
       hostSeatHalo.position.set(
@@ -1187,8 +1229,10 @@ export function CinemaAuditoriumScene({
       sconceGeo.dispose();
       sconceMat.dispose();
       auditoriumSeats.dispose();
-      hostRig.dispose();
-      partnerRig.dispose();
+      hostRigBf.dispose();
+      hostRigGf.dispose();
+      partnerRigBf.dispose();
+      partnerRigGf.dispose();
       fpHostArms.dispose();
       fpGuestArms.dispose();
       interactionFx.dispose();

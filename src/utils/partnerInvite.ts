@@ -1,12 +1,16 @@
+import type { PartnerGenderRole } from '../types/cinema';
+
 export function buildPartnerAuditoriumLink(
   origin: string,
   roomId: string,
-  inviteCode: string
+  inviteCode: string,
+  partnerRole: PartnerGenderRole = 'gf'
 ): string {
   const cleanOrigin = origin.replace(/\/+$/, '');
   const cleanRoomId = encodeURIComponent(roomId.trim());
   const cleanInvite = encodeURIComponent(inviteCode.trim().toUpperCase());
-  return `${cleanOrigin}/cinema/${cleanRoomId}?invite=${cleanInvite}&seat=gf&auditoriumOnly=1`;
+  const seatParam = partnerRole === 'bf' ? 'bf' : 'gf';
+  return `${cleanOrigin}/cinema/${cleanRoomId}?invite=${cleanInvite}&seat=${seatParam}&auditoriumOnly=1`;
 }
 
 export function buildShortPartnerJoinLink(origin: string, inviteCode: string): string {

@@ -4,12 +4,14 @@ import type {
   ChatMessageRecord,
   CoupleInteractionKind,
   CoupleReactionEvent,
+  PartnerGenderRole,
   PlaybackState,
   RoomParticipant,
 } from '../../types/cinema';
 import { applyAuthoritativeCommand, type PlaybackCommandInput } from '../../utils/playbackSync';
-import { formatSeatLabel, resolveCoupleSeats } from '../../utils/seatMap';
+import { formatSeatLabel, resolveCoupleRoles, resolveCoupleSeats } from '../../utils/seatMap';
 import type { CinemaStore } from '../store/cinemaStore';
+import { pushRoomBundleToCloud } from '../store/cloudRoomBridge';
 
 interface ClientMeta {
   ws: WebSocket;
@@ -80,16 +82,22 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
           roomClients.get(roomId)!.add(meta);
 
           const resolvedSeats = resolveCoupleSeats(room.hostSeatId, room.guestSeatId);
+          const resolvedRoles = resolveCoupleRoles(room.hostPartnerRole, room.guestPartnerRole);
           room.hostSeatId = resolvedSeats.hostSeat.id;
           room.guestSeatId = resolvedSeats.guestSeat.id;
+          room.hostPartnerRole = resolvedRoles.hostPartnerRole;
+          room.guestPartnerRole = resolvedRoles.guestPartnerRole;
 
           if (!snap.participants[roomId]) snap.participants[roomId] = [];
           const existingP = snap.participants[roomId].find((p) => p.userId === userId);
           const role = room.hostId === userId ? 'host' : 'guest';
           const assignedSeatId = role === 'host' ? resolvedSeats.hostSeat.id : resolvedSeats.guestSeat.id;
+          const assignedPartnerRole =
+            role === 'host' ? resolvedRoles.hostPartnerRole : resolvedRoles.guestPartnerRole;
           if (existingP) {
             existingP.online = true;
             existingP.displayName = displayName;
+            existingP.partnerRole = assignedPartnerRole;
             if (!existingP.seatId) {
               existingP.seatId = assignedSeatId;
               existingP.seatLabel = formatSeatLabel(assignedSeatId);
@@ -99,6 +107,7 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
               userId,
               displayName,
               role,
+              partnerRole: assignedPartnerRole,
               online: true,
               seatId: assignedSeatId,
               seatLabel: formatSeatLabel(assignedSeatId),
@@ -153,13 +162,21 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
           const current: PlaybackState | undefined = snap.playbackStates[roomId];
           if (!current) return;
           const cmd = msg.command as PlaybackCommandInput;
-          const next = applyAuthoritativeCommand(current, cmd, Date.now());
+          const next = applyAuthoritativeCommand(current, cmd, Date.now(), { userId, displayName });
           snap.playbackStates[roomId] = next;
 
           const room = snap.rooms.find((r) => r.roomId === roomId);
           if (room) {
             room.status = next.playing ? 'playing' : 'paused';
             room.updatedAt = new Date().toISOString();
+            void pushRoomBundleToCloud({
+              room,
+              movie: snap.movies.find((m) => m.id === room.movieId) || null,
+              playbackState: next,
+              participants: snap.participants[roomId] || [],
+              chatHistory: snap.chats[roomId] || [],
+              savedAtMs: Date.now(),
+            });
           }
           await store.save();
 
@@ -178,8 +195,17 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
             typeof msg.hostSeatId === 'string' ? msg.hostSeatId : room.hostSeatId,
             typeof msg.guestSeatId === 'string' ? msg.guestSeatId : room.guestSeatId
           );
+          const resolvedRoles = resolveCoupleRoles(
+            (msg.hostPartnerRole as PartnerGenderRole | undefined) || room.hostPartnerRole,
+            (msg.guestPartnerRole as PartnerGenderRole | undefined) || room.guestPartnerRole
+          );
           room.hostSeatId = resolved.hostSeat.id;
           room.guestSeatId = resolved.guestSeat.id;
+          room.hostPartnerRole = resolvedRoles.hostPartnerRole;
+          room.guestPartnerRole = resolvedRoles.guestPartnerRole;
+          if (typeof msg.hostName === 'string' && msg.hostName.trim()) {
+            room.hostName = msg.hostName.trim().slice(0, 80);
+          }
           if (typeof msg.guestLabel === 'string' && msg.guestLabel.trim()) {
             room.guestLabel = msg.guestLabel.trim().slice(0, 40);
           }
@@ -190,8 +216,18 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
             const nextId = p.role === 'host' ? resolved.hostSeat.id : resolved.guestSeat.id;
             p.seatId = nextId;
             p.seatLabel = formatSeatLabel(nextId);
+            p.partnerRole =
+              p.role === 'host' ? resolvedRoles.hostPartnerRole : resolvedRoles.guestPartnerRole;
           }
           await store.save();
+          void pushRoomBundleToCloud({
+            room,
+            movie: snap.movies.find((m) => m.id === room.movieId) || null,
+            playbackState: snap.playbackStates[roomId],
+            participants: list,
+            chatHistory: snap.chats[roomId] || [],
+            savedAtMs: Date.now(),
+          });
 
           broadcast(roomId, {
             type: 'room:seats',
@@ -225,6 +261,17 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
             snap.chats[roomId] = snap.chats[roomId].slice(-200);
           }
           await store.save();
+          const chatRoom = snap.rooms.find((r) => r.roomId === roomId);
+          if (chatRoom) {
+            void pushRoomBundleToCloud({
+              room: chatRoom,
+              movie: snap.movies.find((m) => m.id === chatRoom.movieId) || null,
+              playbackState: snap.playbackStates[roomId],
+              participants: snap.participants[roomId] || [],
+              chatHistory: snap.chats[roomId] || [],
+              savedAtMs: Date.now(),
+            });
+          }
 
           broadcast(roomId, { type: 'chat:message', message: entry });
           return;
@@ -243,6 +290,17 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
               target.reactions[emoji] = [...arr, userId];
             }
             await store.save();
+            const reactRoom = snap.rooms.find((r) => r.roomId === roomId);
+            if (reactRoom) {
+              void pushRoomBundleToCloud({
+                room: reactRoom,
+                movie: snap.movies.find((m) => m.id === reactRoom.movieId) || null,
+                playbackState: snap.playbackStates[roomId],
+                participants: snap.participants[roomId] || [],
+                chatHistory: snap.chats[roomId] || [],
+                savedAtMs: Date.now(),
+              });
+            }
             broadcast(roomId, { type: 'chat:updated', message: target });
           }
           return;
@@ -293,6 +351,17 @@ export function attachCinemaWebSocket(httpServer: HttpServer, store: CinemaStore
           if (!snap.chats[roomId]) snap.chats[roomId] = [];
           snap.chats[roomId].push(entry);
           await store.save();
+          const snackRoom = snap.rooms.find((r) => r.roomId === roomId);
+          if (snackRoom) {
+            void pushRoomBundleToCloud({
+              room: snackRoom,
+              movie: snap.movies.find((m) => m.id === snackRoom.movieId) || null,
+              playbackState: snap.playbackStates[roomId],
+              participants: snap.participants[roomId] || [],
+              chatHistory: snap.chats[roomId] || [],
+              savedAtMs: Date.now(),
+            });
+          }
           broadcast(roomId, { type: 'chat:message', message: entry });
           broadcast(roomId, {
             type: 'couple:interaction',

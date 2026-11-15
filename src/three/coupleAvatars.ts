@@ -40,7 +40,7 @@ export interface FirstPersonCoupleArms {
  * closing eyelids, dynamic puckering lips, styled layered hair, tailored cinema attire,
  * seated legs/knees, expressive articulated arms, rose prop, and gift box prop.
  */
-export function createRealisticHumanRig(role: 'host' | 'gf'): RealisticHumanRig {
+export function createRealisticHumanRig(role: 'host' | 'bf' | 'gf'): RealisticHumanRig {
   const isGf = role === 'gf';
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
@@ -675,7 +675,7 @@ export function updateHumanRigAnimation(
  * interactions (Warm Hug wrap, Gentle Cheek Caress, Hold Hands, Playful Bonk, Headpat, Rose/Gift),
  * so hugs & touches feel real and physical without blocking normal film viewing.
  */
-export function createFirstPersonCoupleArms(role: 'host' | 'gf'): FirstPersonCoupleArms {
+export function createFirstPersonCoupleArms(role: 'host' | 'bf' | 'gf'): FirstPersonCoupleArms {
   const isGf = role === 'gf';
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];

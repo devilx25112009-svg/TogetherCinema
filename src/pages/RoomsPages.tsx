@@ -14,11 +14,17 @@ import type {
   AudioMode,
   CinemaRoomRecord,
   MovieRecord,
+  PartnerGenderRole,
   QualityOption,
   ScreenMode,
 } from '../types/cinema';
 import { SCREEN_MODE_SPECS } from '../utils/cinemaModes';
-import { DEFAULT_GUEST_SEAT_ID, DEFAULT_HOST_SEAT_ID } from '../utils/seatMap';
+import {
+  DEFAULT_GUEST_SEAT_ID,
+  DEFAULT_HOST_SEAT_ID,
+  formatPartnerRoleBadge,
+  resolveCoupleRoles,
+} from '../utils/seatMap';
 import { analyzeLocalVideoFile, type ContainerAudioAnalysis } from '../utils/theatreAudio';
 import { formatBytes, validateVideoUpload } from '../utils/uploadLogic';
 import { parseYouTubeUrl } from '../utils/youtube';
@@ -167,7 +173,10 @@ export function CreateRoomPage() {
   const [defaultScreenMode, setDefaultScreenMode] = useState<ScreenMode>('Screen X');
   const [hostSeatId, setHostSeatId] = useState(DEFAULT_HOST_SEAT_ID);
   const [guestSeatId, setGuestSeatId] = useState(DEFAULT_GUEST_SEAT_ID);
-  const [guestLabel, setGuestLabel] = useState('My GF');
+  const [hostName, setHostName] = useState(user?.displayName || 'You');
+  const [guestLabel, setGuestLabel] = useState('Maya');
+  const [hostPartnerRole, setHostPartnerRole] = useState<PartnerGenderRole>('bf');
+  const [guestPartnerRole, setGuestPartnerRole] = useState<PartnerGenderRole>('gf');
   const [showSeatPicker, setShowSeatPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +295,7 @@ export function CreateRoomPage() {
         targetMovieId = createdMovie.movie.id;
       }
 
+      const roles = resolveCoupleRoles(hostPartnerRole, guestPartnerRole);
       const { room } = await cinemaApi.createRoom(
         {
           name: name.trim(),
@@ -297,7 +307,10 @@ export function CreateRoomPage() {
           defaultScreenMode,
           hostSeatId,
           guestSeatId,
+          hostName: hostName.trim() || user?.displayName || 'You',
           guestLabel,
+          hostPartnerRole: roles.hostPartnerRole,
+          guestPartnerRole: roles.guestPartnerRole,
         },
         user
       );
@@ -631,10 +644,11 @@ export function CreateRoomPage() {
                 <Armchair className="w-4 h-4 text-[#F472B6]" />
                 <div>
                   <p className="text-xs font-semibold text-white">
-                    Auditorium Seats (72 Seats) — You: {hostSeatId} · {guestLabel}: {guestSeatId}
+                    Auditorium Seats &amp; Couple Roles — {formatPartnerRoleBadge(hostPartnerRole)}: {hostSeatId} ·{' '}
+                    {formatPartnerRoleBadge(guestPartnerRole)} ({guestLabel}): {guestSeatId}
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    Pick where you sit and place your girlfriend anywhere in the hall (you can also move anytime inside).
+                    Pick seats and choose who is BF and who is GF (can be adjusted anytime inside the hall).
                   </p>
                 </div>
               </div>
@@ -643,7 +657,7 @@ export function CreateRoomPage() {
                 onClick={() => setShowSeatPicker((s) => !s)}
                 className="px-3 py-1.5 rounded-lg bg-[#1C1930] border border-[#C4B5FD]/25 text-xs font-semibold text-[#C4B5FD] hover:text-white cursor-pointer"
               >
-                {showSeatPicker ? 'Hide Seat Map' : 'Choose Seats on Map'}
+                {showSeatPicker ? 'Hide Seat Map' : 'Choose Seats & BF/GF'}
               </button>
             </div>
             {showSeatPicker && (
@@ -651,13 +665,18 @@ export function CreateRoomPage() {
                 compact
                 hostSeatId={hostSeatId}
                 guestSeatId={guestSeatId}
-                hostLabel={user?.displayName || 'You'}
+                hostLabel={hostName}
                 guestLabel={guestLabel}
+                hostPartnerRole={hostPartnerRole}
+                guestPartnerRole={guestPartnerRole}
                 screenMode={defaultScreenMode}
                 onChangeSeats={(next) => {
                   setHostSeatId(next.hostSeatId);
                   setGuestSeatId(next.guestSeatId);
+                  if (next.hostName) setHostName(next.hostName);
                   if (next.guestLabel) setGuestLabel(next.guestLabel);
+                  if (next.hostPartnerRole) setHostPartnerRole(next.hostPartnerRole);
+                  if (next.guestPartnerRole) setGuestPartnerRole(next.guestPartnerRole);
                 }}
               />
             )}
@@ -699,7 +718,8 @@ export function JoinRoomPage() {
     try {
       const { room } = await cinemaApi.joinRoom(code.trim(), user);
       const needsGuestSeatParam = !user?.uid || room.hostId === user.uid;
-      navigate(needsGuestSeatParam ? `/cinema/${room.roomId}?seat=gf` : `/cinema/${room.roomId}`);
+      const partnerSeatParam = room.guestPartnerRole || 'gf';
+      navigate(needsGuestSeatParam ? `/cinema/${room.roomId}?seat=${partnerSeatParam}` : `/cinema/${room.roomId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to join room.');
       setBusy(false);
@@ -766,8 +786,9 @@ export function JoinByLinkPage() {
       .joinRoom(code, user)
       .then(({ room }) => {
         if (!active) return;
+        const partnerSeatParam = room.guestPartnerRole || 'gf';
         navigate(
-          `/cinema/${encodeURIComponent(room.roomId)}?invite=${encodeURIComponent(room.inviteCode)}&seat=gf&auditoriumOnly=1`,
+          `/cinema/${encodeURIComponent(room.roomId)}?invite=${encodeURIComponent(room.inviteCode)}&seat=${partnerSeatParam}&auditoriumOnly=1`,
           { replace: true }
         );
       })

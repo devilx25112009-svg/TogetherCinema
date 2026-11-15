@@ -152,7 +152,9 @@ const DEFAULT_ROOMS: CinemaRoomRecord[] = [
     hostId: 'demo-partner-a',
     hostName: 'Aayush',
     guestId: 'demo-partner-b',
-    guestLabel: 'Maya (GF)',
+    guestLabel: 'Maya',
+    hostPartnerRole: 'bf',
+    guestPartnerRole: 'gf',
     hostSeatId: 'D6',
     guestSeatId: 'D7',
     inviteCode: 'LOVE-2026',
@@ -419,6 +421,13 @@ export class CinemaStore {
           tonightRoom.defaultAudio = 'Original Audio';
           if (tonightPb) tonightPb.audioMode = 'Original Audio';
         }
+        if (tonightRoom && !tonightRoom.hostPartnerRole) {
+          tonightRoom.hostPartnerRole = 'bf';
+          tonightRoom.guestPartnerRole = 'gf';
+        }
+        if (tonightRoom && tonightRoom.guestLabel === 'Maya (GF)') {
+          tonightRoom.guestLabel = 'Maya';
+        }
         return this.normalizeSnapshot(parsed);
       }
     } catch {
@@ -468,6 +477,7 @@ export class CinemaStore {
             userId: 'demo-partner-a',
             displayName: 'Aayush',
             role: 'host',
+            partnerRole: 'bf',
             online: true,
             seatId: 'D6',
             seatLabel: 'Row D · Seat 6 (Center)',
@@ -477,6 +487,7 @@ export class CinemaStore {
             userId: 'demo-partner-b',
             displayName: 'Maya',
             role: 'guest',
+            partnerRole: 'gf',
             online: true,
             seatId: 'D7',
             seatLabel: 'Row D · Seat 7 (Center)',
