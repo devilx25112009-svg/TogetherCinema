@@ -98,7 +98,7 @@ export default function FoodPage() {
             </div>
             <div className="lg:col-span-5 h-56 lg:h-full">
               <img
-                src="/src/assets/images/snack_cinema_feast_1794680184354.jpg"
+                src="/images/snack_cinema_feast_1794680184354.jpg"
                 alt="Luxury cinema popcorn and concession spread"
                 className="w-full h-full object-cover"
               />

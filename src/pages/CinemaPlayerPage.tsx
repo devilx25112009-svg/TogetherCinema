@@ -146,6 +146,8 @@ export function CinemaPlayerPage() {
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [syncTransport, setSyncTransport] = useState<'ws' | 'http'>('ws');
+  const lastReactionSyncRef = useRef<number>(Date.now());
 
   // Local player & UI states
   const [displayTime, setDisplayTime] = useState(0);
@@ -296,10 +298,11 @@ export function CinemaPlayerPage() {
     };
   }, [roomId, inviteParam, user]);
 
-  // WebSocket real-time synchronization & chat
+  // WebSocket real-time synchronization & chat (auto-falls back to HTTP Live Sync on serverless hosts like Vercel)
   useEffect(() => {
     if (!roomId) return;
     let closedByUnmount = false;
+    let openedOnce = false;
     let reconnectTimer: number | undefined;
 
     const connect = () => {
@@ -308,8 +311,10 @@ export function CinemaPlayerPage() {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        openedOnce = true;
         setWsConnected(true);
         setReconnecting(false);
+        setSyncTransport('ws');
         ws.send(
           JSON.stringify({
             type: 'room:join',
@@ -387,8 +392,13 @@ export function CinemaPlayerPage() {
       ws.onclose = () => {
         setWsConnected(false);
         if (!closedByUnmount) {
-          setReconnecting(true);
-          reconnectTimer = window.setTimeout(connect, 2000);
+          if (!openedOnce) {
+            setReconnecting(false);
+            setSyncTransport('http');
+          } else {
+            setReconnecting(true);
+            reconnectTimer = window.setTimeout(connect, 2000);
+          }
         }
       };
     };
@@ -400,6 +410,50 @@ export function CinemaPlayerPage() {
       wsRef.current?.close();
     };
   }, [roomId, user?.uid, user?.displayName]);
+
+  // HTTP Live Sync polling fallback for serverless Node.js environments (Vercel)
+  useEffect(() => {
+    if (!roomId || syncTransport !== 'http') return;
+    let active = true;
+
+    const poll = async () => {
+      try {
+        const res = await cinemaApi.syncRoom(roomId, lastReactionSyncRef.current);
+        if (!active) return;
+        lastReactionSyncRef.current = res.serverTime;
+
+        if (res.room) setRoom(res.room);
+        if (res.movie) {
+          setMovie((prev) => (prev?.id === res.movie?.id ? prev : res.movie));
+        }
+        if (res.playbackState && res.playbackState.revision > (playbackRef.current?.revision || 0)) {
+          setPlayback(res.playbackState);
+          setDisplayTime(res.playbackState.currentTime || 0);
+          setScreenMode(res.playbackState.screenMode);
+          setAudioMode(res.playbackState.audioMode);
+        }
+        if (res.participants) setParticipants(res.participants);
+        if (res.chatHistory) setMessages(res.chatHistory);
+        if (res.reactions?.length) {
+          for (const rawEv of res.reactions) {
+            const evItem = rawEv as CoupleReactionEvent;
+            setReactions((prev) => (prev.some((r) => r.id === evItem.id) ? prev : [...prev.slice(-8), evItem]));
+            window.setTimeout(() => {
+              setReactions((prev) => prev.filter((r) => r.id !== evItem.id));
+            }, 3000);
+          }
+        }
+      } catch {
+        // Ignore transient poll errors
+      }
+    };
+
+    const interval = window.setInterval(poll, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [roomId, syncTransport]);
 
   // Attach real video source, server FFmpeg compat stream, instant local 35GB+ PC file, or HLS.js stream
   const registryLocalUrl = getLocalMediaStreamUrl(movie?.id, roomId);
@@ -691,9 +745,16 @@ export function CinemaPlayerPage() {
       }
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'playback:command', command }));
+      } else if (roomId) {
+        cinemaApi
+          .postRoomEvent(roomId, { type: 'playback:command', command }, user)
+          .then((res) => {
+            if (res.playbackState) setPlayback(res.playbackState);
+          })
+          .catch(() => {});
       }
     },
-    [companionAudioUrl, isProceduralVideo, muted, unlockTheatreAudio, volume]
+    [companionAudioUrl, isProceduralVideo, muted, roomId, unlockTheatreAudio, user, volume]
   );
 
   // Theatre keyboard shortcuts
@@ -764,17 +825,26 @@ export function CinemaPlayerPage() {
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
+    const payload = {
+      type: 'chat:message',
+      text: chatInput.trim(),
+      messageType: 'text',
+      replyToId: replyTo?.id,
+      replyPreview: replyTo ? `${replyTo.senderName}: ${replyTo.text.slice(0, 48)}` : undefined,
+    };
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'chat:message',
-          text: chatInput.trim(),
-          messageType: 'text',
-          replyToId: replyTo?.id,
-          replyPreview: replyTo ? `${replyTo.senderName}: ${replyTo.text.slice(0, 48)}` : undefined,
-        })
-      );
+      wsRef.current.send(JSON.stringify(payload));
       wsRef.current.send(JSON.stringify({ type: 'chat:typing', isTyping: false }));
+    } else if (roomId) {
+      cinemaApi
+        .postRoomEvent(roomId, payload, user)
+        .then((res) => {
+          if (res.message) {
+            const msg = res.message;
+            setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          }
+        })
+        .catch(() => {});
     }
     setChatInput('');
     setReplyTo(null);
@@ -784,6 +854,7 @@ export function CinemaPlayerPage() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'couple:interaction', kind }));
     } else if (roomId) {
+      cinemaApi.postRoomEvent(roomId, { type: 'couple:interaction', kind }, user).catch(() => {});
       const opt = COUPLE_INTERACTION_OPTIONS.find((o) => o.kind === kind);
       const localEv: CoupleReactionEvent = {
         id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1178,7 +1249,7 @@ export function CinemaPlayerPage() {
                   <Users className="w-3.5 h-3.5 text-[#F472B6]" />
                   <span>
                     {participants.filter((p) => p.online).length || 1} seated
-                    {wsConnected ? ' · Live Sync' : ''}
+                    {wsConnected ? ' · Live Sync' : syncTransport === 'http' ? ' · Cloud Sync' : ''}
                   </span>
                 </span>
               )}
@@ -1650,9 +1721,20 @@ export function CinemaPlayerPage() {
                           <button
                             key={em}
                             type="button"
-                            onClick={() =>
-                              wsRef.current?.send(JSON.stringify({ type: 'chat:react', messageId: m.id, emoji: em }))
-                            }
+                            onClick={() => {
+                              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                                wsRef.current.send(JSON.stringify({ type: 'chat:react', messageId: m.id, emoji: em }));
+                              } else if (roomId) {
+                                cinemaApi
+                                  .postRoomEvent(roomId, { type: 'chat:react', messageId: m.id, emoji: em }, user)
+                                  .then((res) => {
+                                    if (res.message) {
+                                      setMessages((prev) => prev.map((x) => (x.id === res.message!.id ? res.message! : x)));
+                                    }
+                                  })
+                                  .catch(() => {});
+                              }
+                            }}
                             className="hover:text-white cursor-pointer"
                           >
                             {em} {m.reactions[em]?.length || ''}
@@ -1699,9 +1781,19 @@ export function CinemaPlayerPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        wsRef.current?.send(
-                          JSON.stringify({ type: 'chat:message', text: g.title, gifUrl: g.url, messageType: 'gif' })
-                        );
+                        const payload = { type: 'chat:message', text: g.title, gifUrl: g.url, messageType: 'gif' };
+                        if (wsRef.current?.readyState === WebSocket.OPEN) {
+                          wsRef.current.send(JSON.stringify(payload));
+                        } else if (roomId) {
+                          cinemaApi
+                            .postRoomEvent(roomId, payload, user)
+                            .then((res) => {
+                              if (res.message) {
+                                setMessages((prev) => (prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]));
+                              }
+                            })
+                            .catch(() => {});
+                        }
                         setGifDrawerOpen(false);
                       }}
                       className="rounded overflow-hidden cursor-pointer"
@@ -1743,14 +1835,24 @@ export function CinemaPlayerPage() {
               <button
                 type="button"
                 onClick={() => {
-                  wsRef.current?.send(
-                    JSON.stringify({
-                      type: 'chat:message',
-                      text: 'Voice memo (0:04) — "Love this scene!"',
-                      messageType: 'voice',
-                      voiceDurationSec: 4,
-                    })
-                  );
+                  const payload = {
+                    type: 'chat:message',
+                    text: 'Voice memo (0:04) — "Love this scene!"',
+                    messageType: 'voice',
+                    voiceDurationSec: 4,
+                  };
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify(payload));
+                  } else if (roomId) {
+                    cinemaApi
+                      .postRoomEvent(roomId, payload, user)
+                      .then((res) => {
+                        if (res.message) {
+                          setMessages((prev) => (prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]));
+                        }
+                      })
+                      .catch(() => {});
+                  }
                 }}
                 aria-label="Send quick voice note"
                 className="p-2 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"

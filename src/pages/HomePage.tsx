@@ -152,7 +152,7 @@ export function HomePage() {
 
           <div className="lg:col-span-6 relative rounded-2xl overflow-hidden min-h-[320px] border border-[#C4B5FD]/15">
             <img
-              src="/src/assets/images/cinema_hero_couple_1794680184863.jpg"
+              src="/images/cinema_hero_couple_1794680184863.jpg"
               alt="Private 3D cinema auditorium for two"
               referrerPolicy="no-referrer"
               className="w-full h-full lg:h-full object-cover"

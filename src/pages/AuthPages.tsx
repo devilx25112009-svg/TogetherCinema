@@ -79,7 +79,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         {/* Left Visual Showcase */}
         <div className="relative hidden lg:flex flex-col justify-between p-10 bg-[#151126]">
           <img
-            src="/src/assets/images/cinema_hero_couple_1794680184863.jpg"
+            src="/images/cinema_hero_couple_1794680184863.jpg"
             alt="Luxury private screening room"
             referrerPolicy="no-referrer"
             className="absolute inset-0 w-full h-full object-cover opacity-45"

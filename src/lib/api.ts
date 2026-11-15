@@ -177,6 +177,32 @@ export const cinemaApi = {
         chatHistory: ChatMessageRecord[];
       }>(r)
     ),
+  syncRoom: (roomId: string, since = 0) =>
+    fetch(`/api/rooms/${encodeURIComponent(roomId)}/sync?since=${encodeURIComponent(String(since))}`).then((r) =>
+      handleJson<{
+        room: CinemaRoomRecord;
+        movie: MovieRecord | null;
+        playbackState: PlaybackState;
+        participants: RoomParticipant[];
+        chatHistory: ChatMessageRecord[];
+        reactions: Array<{
+          id: string;
+          roomId: string;
+          senderId: string;
+          senderName: string;
+          kind: string;
+          label: string;
+          createdAt: number;
+        }>;
+        serverTime: number;
+      }>(r)
+    ),
+  postRoomEvent: (roomId: string, payload: Record<string, unknown>, user?: PartnerProfile | null) =>
+    fetch(`/api/rooms/${encodeURIComponent(roomId)}/events`, {
+      method: 'POST',
+      headers: buildHeaders(user),
+      body: JSON.stringify(payload),
+    }).then((r) => handleJson<{ ok: boolean; playbackState?: PlaybackState; message?: ChatMessageRecord }>(r)),
   setRoomSource: (
     roomId: string,
     payload: { movieId?: string; youtubeUrl?: string; title?: string; thumbnailUrl?: string },

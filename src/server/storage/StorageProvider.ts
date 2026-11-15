@@ -27,6 +27,7 @@ import {
   validateMinioConfig,
   type MinioEnvConfig,
 } from './minioConfig';
+import { resolveCinemaStorageDir } from '../runtimeEnv';
 
 export interface StorageConfigStatus {
   provider: 'local' | 's3' | 'gcs';
@@ -168,9 +169,13 @@ export class MinioS3StorageAdapter implements StorageProvider {
 
   constructor(env: Record<string, string | undefined> = process.env, clientOverride?: S3Client) {
     this.config = resolveMinioConfig(env);
-    const metaRoot = path.resolve(env.LOCAL_STORAGE_DIR || '.cinema-storage');
+    const metaRoot = resolveCinemaStorageDir(env);
     this.sessionsDir = path.join(metaRoot, 's3-sessions');
-    fs.mkdirSync(this.sessionsDir, { recursive: true });
+    try {
+      fs.mkdirSync(this.sessionsDir, { recursive: true });
+    } catch {
+      // Ignore if filesystem is read-only
+    }
 
     if (clientOverride) {
       this.s3 = clientOverride;
@@ -693,12 +698,16 @@ export class LocalChunkedStorageAdapter implements StorageProvider {
   private withSessionLock = createSessionMutex();
 
   constructor(baseDir?: string, quotaBytes?: number) {
-    this.baseDir = path.resolve(baseDir || process.env.LOCAL_STORAGE_DIR || '.cinema-storage');
+    this.baseDir = resolveCinemaStorageDir(process.env, baseDir);
     this.sessionsDir = path.join(this.baseDir, 'sessions');
     this.objectsDir = path.join(this.baseDir, 'objects');
     this.quotaBytes = Number(quotaBytes || process.env.STORAGE_QUOTA_BYTES || 53_687_091_200);
-    fs.mkdirSync(this.sessionsDir, { recursive: true });
-    fs.mkdirSync(this.objectsDir, { recursive: true });
+    try {
+      fs.mkdirSync(this.sessionsDir, { recursive: true });
+      fs.mkdirSync(this.objectsDir, { recursive: true });
+    } catch {
+      // Ignore if filesystem is read-only
+    }
   }
 
   private sessionMetaPath(sessionId: string): string {

@@ -343,7 +343,7 @@ export function CinematicIntroScene({ skipIntro = false, onPhaseChange }: Cinema
     return (
       <div className="relative w-full h-full overflow-hidden bg-[#080810]" data-testid="intro-2d-fallback">
         <img
-          src="/src/assets/images/cinema_hero_couple_1794680184863.jpg"
+          src="/images/cinema_hero_couple_1794680184863.jpg"
           alt="Luxury private 3D cinema auditorium"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-80"

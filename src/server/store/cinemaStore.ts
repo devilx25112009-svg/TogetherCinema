@@ -11,6 +11,7 @@ import type {
   SnackItemRecord,
   WatchlistItemRecord,
 } from '../../types/cinema';
+import { normalizeLegacyAssetPath, resolveCinemaStorageDir } from '../runtimeEnv';
 
 export interface PartnerLinkState {
   code: string;
@@ -66,7 +67,7 @@ const DEFAULT_MOVIES: MovieRecord[] = [
       { id: 'ch-3', title: '03. The Violet Nebula Crossing', timeSeconds: 3240 },
       { id: 'ch-4', title: '04. Docking at Perigee', timeSeconds: 5110 },
     ],
-    thumbnailUrl: '/src/assets/images/poster_midnight_orbit_1794680182030.jpg',
+    thumbnailUrl: '/images/poster_midnight_orbit_1794680182030.jpg',
     streamUrl: 'procedural://midnight-orbit',
     processingStatus: 'ready',
     collectionName: 'Late Night Favorites',
@@ -103,7 +104,7 @@ const DEFAULT_MOVIES: MovieRecord[] = [
       { id: 'ch-2', title: '02. Reflections on Cobblestone', timeSeconds: 1280 },
       { id: 'ch-3', title: '03. Encore Under Rain', timeSeconds: 4050 },
     ],
-    thumbnailUrl: '/src/assets/images/poster_velvet_rain_1794680183387.jpg',
+    thumbnailUrl: '/images/poster_velvet_rain_1794680183387.jpg',
     streamUrl: 'procedural://velvet-rain',
     processingStatus: 'ready',
     collectionName: 'Arthouse & Rain',
@@ -134,7 +135,7 @@ const DEFAULT_MOVIES: MovieRecord[] = [
       { id: 'ch-2', title: '02. Drift of a Thousand Lights', timeSeconds: 2150 },
       { id: 'ch-3', title: '03. Pier at Dawn', timeSeconds: 4720 },
     ],
-    thumbnailUrl: '/src/assets/images/poster_paper_lanterns_1794680183501.jpg',
+    thumbnailUrl: '/images/poster_paper_lanterns_1794680183501.jpg',
     streamUrl: 'procedural://paper-lanterns',
     processingStatus: 'ready',
     collectionName: 'Comfort Classics',
@@ -214,7 +215,7 @@ const DEFAULT_MEMORIES: MemoryItemRecord[] = [
     timestampLabel: '23:40',
     note: 'You paused right when the violet nebula filled the IMAX dome because we both said the exact same line.',
     mood: 'Starry-Eyed',
-    imageUrl: '/src/assets/images/poster_midnight_orbit_1794680182030.jpg',
+    imageUrl: '/images/poster_midnight_orbit_1794680182030.jpg',
     movieDate: '2026-11-04',
     createdAt: '2026-11-04T23:15:00.000Z',
   },
@@ -226,7 +227,7 @@ const DEFAULT_MEMORIES: MemoryItemRecord[] = [
     timestampLabel: '35:50',
     note: 'First movie night after moving timezones. Virtual caramel popcorn and three hours of talking over the credits.',
     mood: 'Warm & Cozy',
-    imageUrl: '/src/assets/images/poster_paper_lanterns_1794680183501.jpg',
+    imageUrl: '/images/poster_paper_lanterns_1794680183501.jpg',
     movieDate: '2026-10-28',
     createdAt: '2026-10-28T21:40:00.000Z',
   },
@@ -238,7 +239,7 @@ const DEFAULT_MEMORIES: MemoryItemRecord[] = [
     timestampLabel: '18:12',
     note: 'Tested ScreenX side-wall rain reflections for the first time together.',
     mood: 'Nostalgic',
-    imageUrl: '/src/assets/images/poster_velvet_rain_1794680183387.jpg',
+    imageUrl: '/images/poster_velvet_rain_1794680183387.jpg',
     movieDate: '2026-10-19',
     createdAt: '2026-10-19T22:05:00.000Z',
   },
@@ -253,7 +254,7 @@ const DEFAULT_SNACKS: SnackItemRecord[] = [
     category: 'Popcorn',
     description: 'Warm theater-kettle glaze served in a matte obsidian bowl.',
     calories: '380 kcal',
-    imageUrl: '/src/assets/images/snack_cinema_feast_1794680184354.jpg',
+    imageUrl: '/images/snack_cinema_feast_1794680184354.jpg',
     inTray: true,
     inWishlist: false,
     sentToPartner: true,
@@ -268,7 +269,7 @@ const DEFAULT_SNACKS: SnackItemRecord[] = [
     category: 'Chocolate',
     description: '72% cacao ganache dusted with roasted Piedmont hazelnut.',
     calories: '240 kcal',
-    imageUrl: '/src/assets/images/snack_cinema_feast_1794680184354.jpg',
+    imageUrl: '/images/snack_cinema_feast_1794680184354.jpg',
     inTray: true,
     inWishlist: true,
     sentToPartner: false,
@@ -385,10 +386,27 @@ export class CinemaStore {
   private data: StoreSnapshot;
 
   constructor(storageDir?: string) {
-    const dir = path.resolve(storageDir || process.env.LOCAL_STORAGE_DIR || '.cinema-storage');
-    fs.mkdirSync(dir, { recursive: true });
+    const dir = resolveCinemaStorageDir(process.env, storageDir);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // Fallback to in-memory only if filesystem is strictly read-only
+    }
     this.filePath = path.join(dir, 'cinema-store.json');
     this.data = this.loadInitial();
+  }
+
+  private normalizeSnapshot(snapshot: StoreSnapshot): StoreSnapshot {
+    for (const m of snapshot.movies || []) {
+      m.thumbnailUrl = normalizeLegacyAssetPath(m.thumbnailUrl) || '/images/poster_midnight_orbit_1794680182030.jpg';
+    }
+    for (const mem of snapshot.memories || []) {
+      mem.imageUrl = normalizeLegacyAssetPath(mem.imageUrl) || '/images/cinema_hero_couple_1794680184863.jpg';
+    }
+    for (const snk of snapshot.snacks || []) {
+      snk.imageUrl = normalizeLegacyAssetPath(snk.imageUrl) || '/images/snack_cinema_feast_1794680184354.jpg';
+    }
+    return snapshot;
   }
 
   private loadInitial(): StoreSnapshot {
@@ -401,7 +419,7 @@ export class CinemaStore {
           tonightRoom.defaultAudio = 'Original Audio';
           if (tonightPb) tonightPb.audioMode = 'Original Audio';
         }
-        return parsed;
+        return this.normalizeSnapshot(parsed);
       }
     } catch {
       // Fallback to clean seeded state if file corrupted
@@ -493,12 +511,20 @@ export class CinemaStore {
       },
     };
 
-    fs.writeFileSync(this.filePath, JSON.stringify(snapshot, null, 2), 'utf8');
+    try {
+      fs.writeFileSync(this.filePath, JSON.stringify(snapshot, null, 2), 'utf8');
+    } catch {
+      // Safe no-op on strictly read-only environments
+    }
     return snapshot;
   }
 
   private async persist(): Promise<void> {
-    await fsp.writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf8');
+    try {
+      await fsp.writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf8');
+    } catch {
+      // Keep in-memory state if persistence fails on read-only FS
+    }
   }
 
   getSnapshot(): StoreSnapshot {

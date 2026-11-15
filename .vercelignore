@@ -1,0 +1,9 @@
+node_modules
+uploads
+.cinema-storage
+.aistudio
+.playwright-cli
+dist
+*.log
+.env*
+!.env.example

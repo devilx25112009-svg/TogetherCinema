@@ -7,10 +7,10 @@ import { cinemaApi } from '../lib/api';
 import type { MemoryItemRecord } from '../types/cinema';
 
 const MEMORY_ARTWORKS = [
-  { label: 'Velvet Couple Theatre', url: '/src/assets/images/cinema_hero_couple_1794680184863.jpg' },
-  { label: 'Midnight Orbit Frame', url: '/src/assets/images/poster_midnight_orbit_1794680182030.jpg' },
-  { label: 'Velvet Rain Scene', url: '/src/assets/images/poster_velvet_rain_1794680183387.jpg' },
-  { label: 'Paper Lanterns Still', url: '/src/assets/images/poster_paper_lanterns_1794680183501.jpg' },
+  { label: 'Velvet Couple Theatre', url: '/images/cinema_hero_couple_1794680184863.jpg' },
+  { label: 'Midnight Orbit Frame', url: '/images/poster_midnight_orbit_1794680182030.jpg' },
+  { label: 'Velvet Rain Scene', url: '/images/poster_velvet_rain_1794680183387.jpg' },
+  { label: 'Paper Lanterns Still', url: '/images/poster_paper_lanterns_1794680183501.jpg' },
 ];
 
 export default function MemoriesPage() {

@@ -338,7 +338,7 @@ export function CinemaLobbyScene({ onSelectDestination, onHoverDestination }: Ci
     return (
       <div className="w-full h-full bg-[#0B1020] relative overflow-hidden">
         <img
-          src="/src/assets/images/cinema_hero_couple_1794680184863.jpg"
+          src="/images/cinema_hero_couple_1794680184863.jpg"
           alt="Together Cinema 3D Lobby"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-50"

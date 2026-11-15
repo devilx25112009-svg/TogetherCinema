@@ -2,6 +2,9 @@ node_modules/
 build/
 dist/
 coverage/
+uploads/
+.cinema-storage/
+.playwright-cli/
 .DS_Store
 *.log
 .env*
